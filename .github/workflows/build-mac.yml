@@ -45,6 +45,11 @@ jobs:
       - name: Build .app
         run: pyinstaller GlacierAI_mac.spec --noconfirm
 
+      - name: Ad-hoc codesign
+        run: |
+          codesign --force --deep --sign - dist/GlacierAI.app
+          codesign --verify --deep --strict --verbose=2 dist/GlacierAI.app || true
+
       - name: Package as DMG
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -52,6 +57,9 @@ jobs:
           mkdir -p dmg-staging
           cp -R GlacierAI.app dmg-staging/
           ln -s /Applications dmg-staging/Applications
+          cp ../packaging/mac/首次使用必读.txt dmg-staging/
+          cp ../packaging/mac/一键修复并打开.command dmg-staging/
+          chmod +x dmg-staging/一键修复并打开.command
           hdiutil create -volname "GlacierAI ${VERSION}" \
                          -srcfolder dmg-staging \
                          -ov -format UDZO \
@@ -62,7 +70,13 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           cd dist
-          ditto -c -k --keepParent GlacierAI.app "GlacierAI_${VERSION}_mac.zip"
+          mkdir -p zip-staging
+          cp -R GlacierAI.app zip-staging/
+          cp ../packaging/mac/首次使用必读.txt zip-staging/
+          cp ../packaging/mac/一键修复并打开.command zip-staging/
+          chmod +x zip-staging/一键修复并打开.command
+          ditto -c -k --keepParent zip-staging "GlacierAI_${VERSION}_mac.zip"
+          rm -rf zip-staging
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
