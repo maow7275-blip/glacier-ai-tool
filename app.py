@@ -10,15 +10,54 @@ from PyQt5.QtWidgets import (
     QLabel, QTextEdit, QComboBox, QPushButton, QFileDialog,
     QScrollArea, QMessageBox, QDialog, QLineEdit, QFrame,
     QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QSizePolicy, QStackedWidget,
-    QGridLayout, QSpacerItem, QMenu, QAction, QStyledItemDelegate, QStyle, QListView
+    QGridLayout, QSpacerItem, QMenu, QAction, QStyledItemDelegate, QStyle, QListView,
+    QSlider, QListWidget, QCheckBox
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QPoint, QRect, QTimer, QMimeData
+import re
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QPoint, QRect, QTimer, QMimeData, QEvent, QObject
 from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinearGradient, QBrush, QPen, QPainterPath
+
+
+class MentionPopup(QListWidget):
+    """自定义弹窗，支持点击外部关闭"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setStyleSheet(
+            "QListWidget { background:#141c2e; border:1px solid rgba(125,211,252,0.3);"
+            " color:#e0e8f0; padding:4px; font-size:13px; }"
+            "QListWidget::item { padding:6px 12px; border-radius:4px; }"
+            "QListWidget::item:selected { background:rgba(125,211,252,0.2); color:#bae6fd; }"
+        )
+        # 安装应用程序级别的事件过滤器
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """过滤全局鼠标点击事件，点击弹窗外部时关闭"""
+        if event.type() == QEvent.MouseButtonPress and self.isVisible():
+            # 获取点击的全局坐标
+            click_pos = event.globalPos()
+            # 检查点击位置是否在弹窗区域内
+            if not self.geometry().contains(self.mapFromGlobal(click_pos)):
+                self.hide()
+                return False
+        return super().eventFilter(obj, event)
+
+    def hideEvent(self, event):
+        """弹窗隐藏时移除事件过滤器"""
+        super().hideEvent(event)
 
 
 class PlainPasteTextEdit(QTextEdit):
     """与 QTextEdit 一致，但粘贴时丢弃富文本格式，统一用当前编辑器字体显示。
     避免从浏览器/Word 复制带格式的文字粘进来后字体跟手动输入不一致。"""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._mention_provider = None
+        self._mention_popup = None
+        self._mention_anchor = -1
+
     def insertFromMimeData(self, source):
         if source.hasText():
             md = QMimeData()
@@ -27,13 +66,106 @@ class PlainPasteTextEdit(QTextEdit):
         else:
             super().insertFromMimeData(source)
 
+    def set_mention_provider(self, provider):
+        self._mention_provider = provider
+
+    def _ensure_mention_popup(self):
+        if self._mention_popup is None:
+            popup = MentionPopup()
+            popup.itemClicked.connect(lambda it: self._insert_mention(it.text()))
+            self._mention_popup = popup
+        return self._mention_popup
+
+    def _refresh_mention_popup(self):
+        if not self._mention_provider:
+            self._hide_mention_popup()
+            return
+        candidates = self._mention_provider() or []
+        if not candidates:
+            self._hide_mention_popup()
+            return
+        cursor = self.textCursor()
+        typed = ""
+        if self._mention_anchor >= 0 and cursor.position() >= self._mention_anchor:
+            typed = self.toPlainText()[self._mention_anchor:cursor.position()]
+        if typed:
+            lowered = typed.lower()
+            filtered = [c for c in candidates if lowered in c.lower()]
+        else:
+            filtered = list(candidates)
+        if not filtered:
+            self._hide_mention_popup()
+            return
+        popup = self._ensure_mention_popup()
+        popup.clear()
+        for c in filtered:
+            popup.addItem(c)
+        popup.setCurrentRow(0)
+        rect = self.cursorRect()
+        global_pos = self.mapToGlobal(rect.bottomLeft())
+        popup.move(global_pos)
+        popup.resize(220, min(len(filtered) * 32 + 12, 220))
+        popup.show()
+
+    def _hide_mention_popup(self):
+        if self._mention_popup:
+            self._mention_popup.hide()
+        self._mention_anchor = -1
+
+    def _insert_mention(self, text):
+        if self._mention_anchor < 0:
+            self._hide_mention_popup()
+            return
+        cursor = self.textCursor()
+        cursor.setPosition(self._mention_anchor - 1)
+        cursor.setPosition(self.textCursor().position(), cursor.KeepAnchor)
+        cursor.removeSelectedText()
+        cursor.insertText("@" + text)
+        self._hide_mention_popup()
+        self.setFocus()
+
+    def keyPressEvent(self, event):
+        popup_visible = self._mention_popup is not None and self._mention_popup.isVisible()
+        if popup_visible:
+            key = event.key()
+            if key in (Qt.Key_Up, Qt.Key_Down):
+                self._mention_popup.event(event)
+                return
+            if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab):
+                item = self._mention_popup.currentItem()
+                if item:
+                    self._insert_mention(item.text())
+                    return
+            if key == Qt.Key_Escape:
+                self._hide_mention_popup()
+                return
+        super().keyPressEvent(event)
+        if event.text() == "@":
+            self._mention_anchor = self.textCursor().position()
+            self._refresh_mention_popup()
+            return
+        if self._mention_anchor >= 0:
+            cursor = self.textCursor()
+            doc = self.toPlainText()
+            if (cursor.position() < self._mention_anchor or
+                    self._mention_anchor - 1 < 0 or
+                    self._mention_anchor - 1 >= len(doc) or
+                    doc[self._mention_anchor - 1] != "@"):
+                self._hide_mention_popup()
+                return
+            self._refresh_mention_popup()
+
 
 API_URL = "https://www.hfsyapi.cn/v1/images/generations"
 API_EDIT_URL = "https://www.hfsyapi.cn/v1/images/edits"
 VIDEO_API_URL = "https://www.hfsyapi.cn/v1/video/create"
+GEMINI_API_URL = "https://www.hfsyapi.cn/v1beta/models/gemini-3-pro-image-preview:generateContent"
 FILE_UPLOAD_URL = "https://www.hfsyapi.cn/v1/files/image-upload"
+BALANCE_URL = "https://www.hfsyapi.cn/api/usage/token/fund"
 
 RATIO_LIST = ["1:1", "5:4", "9:16", "16:9", "4:3", "3:2", "4:5", "3:4", "2:3", "21:9"]
+
+GEMINI_RATIO_LIST = ["1:1", "4:3", "3:4", "16:9", "9:16"]
 
 SIZE_MAP = {
     "1:1":  {"1k": "1024x1024", "2k": "2048x2048", "4k": "2880x2880"},
@@ -48,15 +180,102 @@ SIZE_MAP = {
     "21:9": {"1k": "1344x576",  "2k": "2016x864",  "4k": "3696x1584"},
 }
 
+GEMINI_SIZE_MAP = {
+    "1:1":  {"1k": "1024x1024", "2k": "2048x2048", "4k": "4096x4096"},
+    "4:3":  {"1k": "1024x768",  "2k": "2048x1536", "4k": "4096x3072"},
+    "3:4":  {"1k": "768x1024",  "2k": "1536x2048", "4k": "3072x4096"},
+    "16:9": {"1k": "1024x576",  "2k": "2048x1152", "4k": "4096x2304"},
+    "9:16": {"1k": "576x1024",  "2k": "1152x2048", "4k": "2304x4096"},
+}
+
 MODEL_QUALITY = {
     "gpt-image-2": ["1k"],
     "gpt-image-2pro": ["2k", "4k"],
+    "gemini-3-pro-image-preview": ["1k", "2k", "4k"],
 }
+
+GEMINI_MODELS = {"gemini-3-pro-image-preview"}
+GEMINI_MAX_REFERENCE_IMAGES = 4
 
 QUALITY_TO_API = {"1k": "low", "2k": "medium", "4k": "high"}
 
 VIDEO_SIZES = {"横屏": "landscape", "竖屏": "portrait"}
 VIDEO_DURATIONS = ["4", "8", "12"]
+
+
+def extract_video_first_frame_bytes(video_bytes_or_path):
+    """从视频字节或文件路径抽首帧，返回 PNG bytes，失败返回 None。"""
+    try:
+        import cv2
+        import numpy as np
+        import tempfile
+    except Exception:
+        return None
+    tmp_path = None
+    try:
+        if isinstance(video_bytes_or_path, (bytes, bytearray)):
+            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            tmp.write(video_bytes_or_path)
+            tmp.close()
+            tmp_path = tmp.name
+            path = tmp_path
+        else:
+            path = video_bytes_or_path
+        cap = cv2.VideoCapture(path)
+        try:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                return None
+            ok2, buf = cv2.imencode(".png", frame)
+            if not ok2:
+                return None
+            return bytes(buf)
+        finally:
+            cap.release()
+    except Exception:
+        return None
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+def get_or_make_thumb_for_video(video_path):
+    """对历史记录中的视频文件返回首帧 PNG 路径，缓存到同目录 .thumb.png。"""
+    if not os.path.exists(video_path):
+        return None
+    thumb_path = video_path + ".thumb.png"
+    if os.path.exists(thumb_path) and os.path.getmtime(thumb_path) >= os.path.getmtime(video_path):
+        return thumb_path
+    png_bytes = extract_video_first_frame_bytes(video_path)
+    if not png_bytes:
+        return None
+    try:
+        with open(thumb_path, "wb") as f:
+            f.write(png_bytes)
+        return thumb_path
+    except Exception:
+        return None
+
+VIDEO_MODELS = ["sora-2", "sd-2", "sd-2-vip", "Kling Omni"]
+VIDEO_MODEL_DURATIONS = {
+    "sora-2": ["4", "8", "12"],
+    "sd-2": ["5", "8", "10", "12", "15"],
+    "sd-2-vip": ["5", "8", "10", "12", "15"],
+    "Kling Omni": ["3", "5", "8", "10", "12", "15"],
+}
+VIDEO_PROMPT_LIMIT = {"sd-2": 1500, "sd-2-vip": 1500, "Kling Omni": 1500}
+VIDEO_MODEL_ORIENTATIONS = {
+    "sora-2": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-vip": {"横屏": "landscape", "竖屏": "portrait"},
+    "Kling Omni": {"横屏": "landscape", "竖屏": "portrait", "方屏": "square"},
+}
+VIDEO_MODEL_MAX_IMAGES_BASE = {"sora-2": 1, "sd-2": 4, "sd-2-vip": 4, "Kling Omni": 7}
+VIDEO_MODEL_MAX_IMAGES_WITH_VIDEO = {"sora-2": 1, "sd-2": 4, "sd-2-vip": 4, "Kling Omni": 4}
+VIDEO_MODEL_MAX_VIDEOS = {"sora-2": 0, "sd-2": 3, "sd-2-vip": 3, "Kling Omni": 1}
 
 
 # 注意：下拉项的灰色高光改用纯 QSS 实现（见 DARK_STYLE 中
@@ -480,6 +699,22 @@ QPushButton#tutorialBtn {
 QPushButton#tutorialBtn:hover {
     color: #7dd3fc;
 }
+QCheckBox#rememberChk {
+    color: #94a3b8;
+    font-size: 13px;
+    spacing: 8px;
+}
+QCheckBox#rememberChk::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid rgba(125, 211, 252, 0.3);
+    border-radius: 3px;
+    background-color: rgba(15, 23, 42, 0.6);
+}
+QCheckBox#rememberChk::indicator:checked {
+    background-color: #7dd3fc;
+    border: 1px solid #7dd3fc;
+}
 """
 
 
@@ -568,10 +803,10 @@ class TutorialDialog(QDialog):
 
 
 class KeyDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, prefill_key=""):
         super().__init__(parent)
         self.setWindowTitle("Glacier AI")
-        self.setFixedSize(440, 420)
+        self.setFixedSize(440, 460)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setStyleSheet(LOGIN_STYLE)
 
@@ -596,7 +831,7 @@ class KeyDialog(QDialog):
         subtitle.setObjectName("loginSubtitle")
         card_layout.addWidget(subtitle)
 
-        version = QLabel("VERSION 2.7")
+        version = QLabel("VERSION 3.0")
         version.setObjectName("loginVersion")
         card_layout.addWidget(version)
 
@@ -619,6 +854,12 @@ class KeyDialog(QDialog):
         self.toggle_btn.clicked.connect(self.toggle_visibility)
         card_layout.addWidget(self.toggle_btn, alignment=Qt.AlignRight)
 
+        self.remember_chk = QCheckBox("记住 API Key（保存到本地，下次免输入）")
+        self.remember_chk.setObjectName("rememberChk")
+        self.remember_chk.setCursor(Qt.PointingHandCursor)
+        self.remember_chk.setChecked(True)
+        card_layout.addWidget(self.remember_chk)
+
         card_layout.addSpacing(4)
 
         self.login_btn = QPushButton("开始使用")
@@ -635,6 +876,10 @@ class KeyDialog(QDialog):
         card_layout.addWidget(self.tutorial_btn, alignment=Qt.AlignCenter)
 
         outer.addWidget(card)
+
+        if prefill_key:
+            self.key_input.setText(prefill_key)
+            self.remember_chk.setChecked(True)
 
     def toggle_visibility(self):
         if self.key_input.echoMode() == QLineEdit.Password:
@@ -665,6 +910,9 @@ class KeyDialog(QDialog):
 
     def get_key(self):
         return self.key_input.text().strip()
+
+    def should_remember(self):
+        return self.remember_chk.isChecked()
 
     def show_tutorial(self):
         dlg = TutorialDialog(self)
@@ -729,6 +977,69 @@ class UploadRefImageThread(QThread):
         self.finished_ok.emit(self.tag, url, img_bytes)
 
 
+class BalanceQueryThread(QThread):
+    """查询账户余额。hfsyapi 提供的专用接口 /api/usage/token/fund 直接返回当前账号余额。"""
+    finished_ok = pyqtSignal(float)
+    failed = pyqtSignal(str)
+
+    def __init__(self, api_key):
+        super().__init__()
+        self.api_key = api_key
+
+    def run(self):
+        try:
+            resp = requests.get(
+                BALANCE_URL,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=15,
+            )
+        except Exception as e:
+            self.failed.emit(f"网络错误: {e}")
+            return
+        if resp.status_code != 200:
+            self.failed.emit(f"HTTP {resp.status_code}")
+            return
+        try:
+            data = resp.json()
+        except Exception:
+            self.failed.emit("响应解析失败")
+            return
+        if not data.get("success", False):
+            self.failed.emit(data.get("message") or "查询失败")
+            return
+
+        amount = self._extract_amount(data.get("data"))
+        if amount is None:
+            self.failed.emit(f"未识别的余额字段: {repr(data.get('data'))[:80]}")
+            return
+        self.finished_ok.emit(amount)
+
+    @staticmethod
+    def _extract_amount(payload):
+        """兼容 data 为数值/字符串/对象的多种返回格式。"""
+        if payload is None:
+            return None
+        if isinstance(payload, (int, float)):
+            return float(payload)
+        if isinstance(payload, str):
+            try:
+                return float(payload.replace(",", "").replace("¥", "").replace("$", "").strip())
+            except ValueError:
+                return None
+        if isinstance(payload, dict):
+            for key in ("fund", "balance", "remain", "remain_quota", "quota"):
+                if key in payload:
+                    val = payload[key]
+                    if isinstance(val, (int, float)):
+                        return float(val)
+                    if isinstance(val, str):
+                        try:
+                            return float(val)
+                        except ValueError:
+                            continue
+        return None
+
+
 class GenerateThread(QThread):
     one_finished = pyqtSignal(int, bytes)
     progress = pyqtSignal(str)
@@ -747,6 +1058,9 @@ class GenerateThread(QThread):
         self.image_url = image_url
 
     def _generate_one(self, index):
+        if self.model in GEMINI_MODELS:
+            self._generate_one_gemini(index)
+            return
         print(f"[DEBUG] _generate_one({index}) started, image_url={'YES' if self.image_url else 'NO'}, model={self.model}", flush=True)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -856,6 +1170,96 @@ class GenerateThread(QThread):
             t.join()
         self.all_done.emit()
 
+    def _generate_one_gemini(self, index):
+        print(f"[DEBUG] _generate_one_gemini({index}) started, image_url={'YES' if self.image_url else 'NO'}, model={self.model}", flush=True)
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        parts = [{"text": self.prompt}]
+        if self.image_url:
+            for url in list(self.image_url)[:GEMINI_MAX_REFERENCE_IMAGES]:
+                parts.append({"fileData": {"fileUri": url}})
+
+        ratio = "1:1"
+        for r in GEMINI_RATIO_LIST:
+            if GEMINI_SIZE_MAP.get(r, {}).get(self.quality) == self.size:
+                ratio = r
+                break
+
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {
+                "imageConfig": {"aspectRatio": ratio}
+            }
+        }
+
+        print(f"[DEBUG] POST {GEMINI_API_URL} (gemini, ratio={ratio}, refs={len(self.image_url) if self.image_url else 0})", flush=True)
+
+        import time as _time
+        max_retries = 2
+        resp = None
+        for attempt in range(max_retries + 1):
+            resp = requests.post(GEMINI_API_URL, headers=headers, json=payload, timeout=600)
+            with open("debug_output.log", "a", encoding="utf-8") as _f:
+                _f.write(f"[RESP] model={self.model}, status={resp.status_code}, body={resp.text[:500]}\n")
+            print(f"[DEBUG] Gemini response status={resp.status_code}, body={resp.text[:300]}", flush=True)
+            if resp.status_code == 200:
+                break
+            if resp.status_code in (500, 502, 503) and attempt < max_retries:
+                wait = (attempt + 1) * 3
+                self.progress.emit(f"第{index+1}张遇到服务器错误，{wait}秒后重试...")
+                _time.sleep(wait)
+            else:
+                break
+
+        if resp.status_code != 200:
+            self.error.emit(index, f"第{index+1}张 API 错误 ({resp.status_code}): {resp.text[:200]}")
+            return
+
+        try:
+            data = resp.json()
+        except Exception:
+            self.error.emit(index, f"第{index+1}张 API 返回非 JSON")
+            return
+
+        img_url = self._extract_gemini_image_url(data)
+        if not img_url:
+            self.error.emit(index, f"第{index+1}张未找到图片地址")
+            return
+
+        if img_url.startswith("/"):
+            img_url = "https://www.hfsyapi.cn" + img_url
+
+        print(f"[DEBUG] Downloading gemini image from: {img_url}", flush=True)
+        dl_headers = {"Authorization": f"Bearer {self.api_key}"}
+        img_resp = requests.get(img_url, headers=dl_headers, timeout=120)
+        print(f"[DEBUG] Gemini download status={img_resp.status_code}, length={len(img_resp.content)}", flush=True)
+
+        if img_resp.status_code == 200 and len(img_resp.content) > 1000:
+            self.one_finished.emit(index, img_resp.content)
+        else:
+            self.error.emit(index, f"第{index+1}张下载失败 ({img_resp.status_code})")
+
+    def _extract_gemini_image_url(self, data):
+        try:
+            candidates = data.get("candidates", [])
+            for cand in candidates:
+                content = cand.get("content", {})
+                for p in content.get("parts", []):
+                    fd = p.get("fileData") or p.get("file_data")
+                    if fd:
+                        uri = fd.get("fileUri") or fd.get("file_uri")
+                        if uri:
+                            return uri
+                    inline = p.get("inlineData") or p.get("inline_data")
+                    if inline and inline.get("data"):
+                        return None
+        except Exception as e:
+            print(f"[DEBUG] _extract_gemini_image_url error: {e}", flush=True)
+        return None
+
     def _safe_generate(self, index):
         try:
             self._generate_one(index)
@@ -880,7 +1284,7 @@ class VideoGenerateThread(QThread):
     error = pyqtSignal(int, str)
     all_done = pyqtSignal()
 
-    def __init__(self, api_key, prompt, size, duration, count=1, image_url=None):
+    def __init__(self, api_key, prompt, size, duration, count=1, image_url=None, model="sora-2", video_refs=None, sd_size=None, start_image_url=None, end_image_url=None):
         super().__init__()
         self.api_key = api_key
         self.prompt = prompt
@@ -888,6 +1292,11 @@ class VideoGenerateThread(QThread):
         self.duration = duration
         self.count = count
         self.image_url = image_url
+        self.model = model
+        self.video_refs = video_refs
+        self.sd_size = sd_size
+        self.start_image_url = start_image_url
+        self.end_image_url = end_image_url
 
     def _generate_one(self, index):
         import time
@@ -896,15 +1305,27 @@ class VideoGenerateThread(QThread):
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "sora-2",
+            "model": self.model,
             "prompt": self.prompt,
             "orientation": self.size,
-            "size": "1080p",
             "duration": int(self.duration),
             "watermark": False,
         }
+        if self.model == "sora-2":
+            payload["size"] = "1080p"
+        elif self.sd_size:
+            payload["size"] = self.sd_size
         if self.image_url:
-            payload["images"] = [self.image_url] if isinstance(self.image_url, str) else list(self.image_url)
+            if isinstance(self.image_url, str):
+                payload["images"] = [self.image_url]
+            else:
+                payload["images"] = list(self.image_url)
+        if self.video_refs:
+            payload["video"] = list(self.video_refs)
+        if self.start_image_url:
+            payload["start_image_url"] = self.start_image_url
+        if self.end_image_url:
+            payload["end_image_url"] = self.end_image_url
 
         def _log(tag, content):
             try:
@@ -961,8 +1382,12 @@ class VideoGenerateThread(QThread):
                     _log("NO_URL", f"poll_data={json.dumps(poll_data, ensure_ascii=False)[:600]}")
                     self.error.emit(index, f"第{index+1}个任务完成但未返回视频地址")
                     return
+                _log("COMPLETED", f"poll_iter={i}, elapsed={(i+1)*5}s, url={video_url[:120]}")
                 self.progress.emit(f"第{index+1}个视频: 正在下载...")
+                dl_start = time.time()
                 vid_resp = requests.get(video_url, timeout=300)
+                dl_elapsed = time.time() - dl_start
+                _log("DOWNLOAD", f"status={vid_resp.status_code}, bytes={len(vid_resp.content)}, elapsed={dl_elapsed:.1f}s")
                 if vid_resp.status_code == 200:
                     self.one_finished.emit(index, vid_resp.content)
                 else:
@@ -1014,6 +1439,13 @@ class ClickableLabel(QLabel):
         self.setFixedSize(150, 150)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_menu)
+        if is_video:
+            png_bytes = extract_video_first_frame_bytes(raw_bytes)
+            if png_bytes:
+                qimg = QImage.fromData(png_bytes)
+                if not qimg.isNull():
+                    pm = QPixmap.fromImage(qimg).scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self.setPixmap(pm)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -1085,14 +1517,15 @@ class PreviewDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        self._tmp_video_path = None
+        self._media_player = None
+        self._video_widget = None
+        self._play_btn = None
+        self._pos_slider = None
+        self._slider_user_dragging = False
+
         if is_video:
-            info = QLabel()
-            info.setAlignment(Qt.AlignCenter)
-            size_kb = len(raw_bytes) / 1024
-            size_str = f"{size_kb / 1024:.1f} MB" if size_kb > 1024 else f"{size_kb:.0f} KB"
-            info.setText(f"🎬 视频文件\n\n大小: {size_str}\n\n保存到本地后可播放")
-            info.setStyleSheet("color: #e0e8f0; font-size: 16px; background: transparent;")
-            layout.addWidget(info, 1)
+            self._build_video_player(layout)
         else:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -1125,6 +1558,213 @@ class PreviewDialog(QDialog):
         btn_row.addWidget(close_btn)
         layout.addLayout(btn_row)
 
+    def _build_video_player(self, layout):
+        # 使用 ffpyplayer 实现视频播放（内置 ffmpeg，支持音视频同步）
+        try:
+            from ffpyplayer.player import MediaPlayer
+        except Exception as e:
+            fallback = QLabel(f"需要安装 ffpyplayer: pip install ffpyplayer\n{e}")
+            fallback.setAlignment(Qt.AlignCenter)
+            fallback.setStyleSheet("color:#e0e8f0; font-size:14px; background: transparent;")
+            layout.addWidget(fallback, 1)
+            return
+
+        try:
+            tmp_dir = os.path.join(_APP_DIR, "history", "_preview_tmp")
+            os.makedirs(tmp_dir, exist_ok=True)
+            tmp_path = os.path.join(tmp_dir, f"preview_{datetime.now().strftime('%H%M%S_%f')}.mp4")
+            with open(tmp_path, "wb") as f:
+                f.write(self.raw_bytes)
+            self._tmp_video_path = tmp_path
+        except Exception as e:
+            fallback = QLabel(f"临时文件写入失败: {e}")
+            fallback.setAlignment(Qt.AlignCenter)
+            fallback.setStyleSheet("color:#e0e8f0; font-size:14px; background: transparent;")
+            layout.addWidget(fallback, 1)
+            return
+
+        # 初始化 ffpyplayer 状态
+        self._ff_player = None
+        self._ff_is_playing = False
+        self._ff_duration = 0
+        self._ff_current_pos = 0
+
+        # 视频显示标签
+        self._video_label = QLabel()
+        self._video_label.setAlignment(Qt.AlignCenter)
+        self._video_label.setStyleSheet("background:#000;")
+        self._video_label.setScaledContents(False)
+        layout.addWidget(self._video_label, 1)
+
+        # 播放定时器（用于刷新视频帧）
+        self._ff_timer = QTimer(self)
+        self._ff_timer.timeout.connect(self._ff_refresh_frame)
+
+        # 控制栏
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setContentsMargins(16, 6, 16, 0)
+        ctrl_row.setSpacing(10)
+
+        self._play_btn = QPushButton("▶ 播放")
+        self._play_btn.setObjectName("refBtn")
+        self._play_btn.setCursor(Qt.PointingHandCursor)
+        self._play_btn.setFixedWidth(96)
+        self._play_btn.clicked.connect(self._ff_toggle_play)
+        ctrl_row.addWidget(self._play_btn)
+
+        self._pos_slider = QSlider(Qt.Horizontal)
+        self._pos_slider.setRange(0, 1000)
+        self._pos_slider.sliderPressed.connect(self._on_slider_press)
+        self._pos_slider.sliderReleased.connect(self._ff_on_slider_release)
+        ctrl_row.addWidget(self._pos_slider, 1)
+
+        self._time_label = QLabel("00:00 / 00:00")
+        self._time_label.setStyleSheet("color:#94a3b8; font-size:11px; font-family:Consolas;")
+        ctrl_row.addWidget(self._time_label)
+
+        layout.addLayout(ctrl_row)
+
+        # 初始化 ffpyplayer（暂停状态）
+        try:
+            self._ff_player = MediaPlayer(self._tmp_video_path, ff_opts={'paused': True, 'sync': 'audio'})
+            # 等待获取元数据
+            import time as _time
+            for _ in range(30):
+                metadata = self._ff_player.get_metadata()
+                if metadata.get('duration'):
+                    self._ff_duration = metadata['duration']
+                    break
+                _time.sleep(0.05)
+        except Exception as e:
+            fallback = QLabel(f"播放器初始化失败: {e}")
+            fallback.setAlignment(Qt.AlignCenter)
+            fallback.setStyleSheet("color:#e0e8f0; font-size:14px; background: transparent;")
+            layout.addWidget(fallback, 1)
+            return
+
+        # 启动定时器持续刷新
+        self._ff_timer.start(10)  # 初始间隔，会根据 val 动态调整
+
+    def _ff_refresh_frame(self):
+        """刷新视频帧（由定时器调用）"""
+        if not hasattr(self, "_ff_player") or not self._ff_player:
+            return
+
+        try:
+            frame, val = self._ff_player.get_frame()
+
+            if val == 'eof':
+                # 播放结束
+                self._ff_is_playing = False
+                if hasattr(self, "_play_btn") and self._play_btn:
+                    self._play_btn.setText("▶ 播放")
+                # 重置到开头
+                try:
+                    self._ff_player.seek(0, relative=False)
+                    self._ff_player.set_pause(True)
+                except Exception:
+                    pass
+                return
+
+            # 只在拿到有效帧时更新画面
+            if frame is not None and val != 'paused':
+                img, t = frame
+                # 获取图像数据
+                w, h = img.get_size()
+                img_data = bytes(img.to_bytearray()[0])
+
+                # 创建 QImage（ffpyplayer 默认输出 RGB24）
+                qt_image = QImage(img_data, w, h, w * 3, QImage.Format_RGB888)
+
+                # 缩放显示
+                if hasattr(self, "_video_label") and self._video_label:
+                    pixmap = QPixmap.fromImage(qt_image)
+                    scaled_pixmap = pixmap.scaled(
+                        self._video_label.size(),
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation
+                    )
+                    self._video_label.setPixmap(scaled_pixmap)
+
+            # 根据 val 调整下次刷新时间（val 是建议的下次刷新延迟）
+            if isinstance(val, (int, float)) and val > 0:
+                # 至少 1ms，最多 50ms
+                next_delay = max(1, min(50, int(val * 1000)))
+                self._ff_timer.setInterval(next_delay)
+            else:
+                self._ff_timer.setInterval(10)
+
+            # 始终更新进度
+            try:
+                pts = self._ff_player.get_pts()
+                if pts is not None:
+                    self._ff_current_pos = pts
+                    if not self._slider_user_dragging and self._ff_duration > 0:
+                        slider_value = int((pts / self._ff_duration) * 1000)
+                        self._pos_slider.setValue(slider_value)
+                    self._ff_update_time_label()
+            except Exception:
+                pass
+        except Exception as e:
+            pass
+
+    def _ff_toggle_play(self):
+        """切换播放/暂停"""
+        if not self._ff_player:
+            return
+
+        if self._ff_is_playing:
+            self._ff_is_playing = False
+            self._ff_player.set_pause(True)
+            self._play_btn.setText("▶ 播放")
+        else:
+            self._ff_is_playing = True
+            self._ff_player.set_pause(False)
+            self._play_btn.setText("⏸ 暂停")
+
+    def _ff_on_slider_release(self):
+        """滑块释放时跳转"""
+        if self._pos_slider and self._ff_player and self._ff_duration > 0:
+            target_pos = (self._pos_slider.value() / 1000) * self._ff_duration
+            try:
+                self._ff_player.seek(target_pos, relative=False, accurate=True)
+            except Exception:
+                pass
+        self._slider_user_dragging = False
+
+    def _ff_update_time_label(self):
+        """更新时间标签"""
+        if not hasattr(self, "_time_label"):
+            return
+
+        def fmt(sec):
+            sec = max(0, int(sec))
+            return f"{sec // 60:02d}:{sec % 60:02d}"
+
+        self._time_label.setText(f"{fmt(self._ff_current_pos)} / {fmt(self._ff_duration)}")
+
+    def _on_slider_press(self):
+        self._slider_user_dragging = True
+
+    def closeEvent(self, event):
+        # 停止 ffpyplayer 播放器
+        try:
+            if hasattr(self, "_ff_timer") and self._ff_timer:
+                self._ff_timer.stop()
+            if hasattr(self, "_ff_player") and self._ff_player:
+                self._ff_player.close_player()
+                self._ff_player = None
+        except Exception:
+            pass
+
+        # 清理临时文件
+        if self._tmp_video_path and os.path.exists(self._tmp_video_path):
+            try:
+                os.remove(self._tmp_video_path)
+            except Exception:
+                pass
+        super().closeEvent(event)
+
     def _save(self):
         if self.is_video:
             name = f"sora_video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
@@ -1152,6 +1792,114 @@ else:
 
 HISTORY_DIR = os.path.join(_APP_DIR, "history")
 HISTORY_JSON = os.path.join(HISTORY_DIR, "history.json")
+UI_SETTINGS_JSON = os.path.join(_APP_DIR, "ui_settings.json")
+API_KEY_FILE = os.path.join(_APP_DIR, "api_key.dat")
+
+DEFAULT_UI_SETTINGS = {"font_scale": 100, "brightness": 0}
+
+
+def save_api_key(key):
+    """保存 API Key 到本地文件，使用 base64 编码（仅防止明文窥视，非加密）"""
+    try:
+        encoded = base64.b64encode(key.encode("utf-8")).decode("ascii")
+        with open(API_KEY_FILE, "w", encoding="utf-8") as f:
+            f.write(encoded)
+    except Exception:
+        pass
+
+
+def load_api_key():
+    if not os.path.exists(API_KEY_FILE):
+        return ""
+    try:
+        with open(API_KEY_FILE, "r", encoding="utf-8") as f:
+            encoded = f.read().strip()
+        if not encoded:
+            return ""
+        return base64.b64decode(encoded.encode("ascii")).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def clear_api_key():
+    try:
+        if os.path.exists(API_KEY_FILE):
+            os.remove(API_KEY_FILE)
+    except Exception:
+        pass
+
+
+def load_ui_settings():
+    if os.path.exists(UI_SETTINGS_JSON):
+        try:
+            with open(UI_SETTINGS_JSON, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {
+                "font_scale": int(data.get("font_scale", 100)),
+                "brightness": int(data.get("brightness", 0)),
+            }
+        except Exception:
+            pass
+    return dict(DEFAULT_UI_SETTINGS)
+
+
+def save_ui_settings(settings):
+    try:
+        with open(UI_SETTINGS_JSON, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _shift_channel(v, delta):
+    return max(0, min(255, int(v) + delta))
+
+
+def _shift_hex_color(match, delta):
+    s = match.group(0)
+    h = s[1:]
+    if len(h) == 3:
+        r, g, b = (int(c * 2, 16) for c in h)
+    elif len(h) == 6:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    else:
+        return s
+    r, g, b = _shift_channel(r, delta), _shift_channel(g, delta), _shift_channel(b, delta)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _shift_rgba(match, delta):
+    parts = [p.strip() for p in match.group(1).split(",")]
+    if len(parts) < 3:
+        return match.group(0)
+    r = _shift_channel(parts[0], delta)
+    g = _shift_channel(parts[1], delta)
+    b = _shift_channel(parts[2], delta)
+    if len(parts) == 3:
+        return f"rgb({r}, {g}, {b})"
+    return f"rgba({r}, {g}, {b}, {parts[3]})"
+
+
+def apply_ui_adjustments(qss, font_scale=100, brightness=0):
+    """缩放 QSS 中的 font-size，并整体偏移颜色亮度。
+    font_scale: 80~140 百分比；brightness: -30~+40 通道偏移"""
+    if font_scale != 100:
+        def _scale(m):
+            px = int(m.group(1))
+            return f"font-size: {max(8, round(px * font_scale / 100))}px"
+        qss = re.sub(r"font-size:\s*(\d+)px", _scale, qss)
+    if brightness != 0:
+        qss = re.sub(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b",
+                     lambda m: _shift_hex_color(m, brightness), qss)
+        qss = re.sub(r"rgba?\(([^)]+)\)",
+                     lambda m: _shift_rgba(m, brightness), qss)
+    return qss
+
+
+def shift_inline_bg(color_hex, brightness):
+    if brightness == 0:
+        return color_hex
+    return _shift_hex_color(re.match(r"#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3}", color_hex), brightness)
 
 
 def ensure_history_dir():
@@ -1202,6 +1950,185 @@ def add_video_history_record(prompt, model, orientation, duration, video_paths):
     )
 
 
+SETTINGS_DIALOG_STYLE = """
+QDialog#settingsDlg {
+    background-color: #0a0e1a;
+    border: 1px solid rgba(125, 211, 252, 0.2);
+}
+QLabel#settingsTitle {
+    color: #7dd3fc;
+    font-size: 18px;
+    font-weight: 700;
+}
+QLabel#settingsHint {
+    color: #64748b;
+    font-size: 12px;
+}
+QLabel#settingsRow {
+    color: #e0e8f0;
+    font-size: 14px;
+    font-weight: 600;
+}
+QLabel#settingsValue {
+    color: #7dd3fc;
+    font-size: 13px;
+    font-family: "Consolas", "Courier New";
+    min-width: 56px;
+}
+QSlider::groove:horizontal {
+    background: rgba(125, 211, 252, 0.15);
+    height: 4px;
+    border-radius: 2px;
+}
+QSlider::sub-page:horizontal {
+    background: rgba(125, 211, 252, 0.5);
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: #7dd3fc;
+    width: 14px;
+    height: 14px;
+    margin: -6px 0;
+    border-radius: 7px;
+}
+QPushButton#settingsApply {
+    background-color: rgba(125, 211, 252, 0.15);
+    border: 1px solid rgba(125, 211, 252, 0.3);
+    border-radius: 8px;
+    color: #7dd3fc;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 8px 22px;
+}
+QPushButton#settingsApply:hover {
+    background-color: rgba(125, 211, 252, 0.25);
+}
+QPushButton#settingsReset {
+    background: transparent;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 8px;
+    color: #94a3b8;
+    font-size: 14px;
+    padding: 8px 18px;
+}
+QPushButton#settingsReset:hover {
+    color: #e0e8f0;
+    border-color: rgba(148, 163, 184, 0.6);
+}
+"""
+
+
+class SettingsDialog(QDialog):
+    def __init__(self, parent, font_scale, brightness, on_change):
+        super().__init__(parent)
+        self.setObjectName("settingsDlg")
+        self.setWindowTitle("界面设置")
+        self.setStyleSheet(SETTINGS_DIALOG_STYLE)
+        self.setFixedWidth(440)
+        self._on_change = on_change
+        self._initial = (font_scale, brightness)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 22)
+        layout.setSpacing(14)
+
+        title = QLabel("界面设置")
+        title.setObjectName("settingsTitle")
+        layout.addWidget(title)
+
+        hint = QLabel("拖动滑条即时预览，确认后点击「应用」保存。")
+        hint.setObjectName("settingsHint")
+        layout.addWidget(hint)
+        layout.addSpacing(6)
+
+        font_row = QHBoxLayout()
+        font_label = QLabel("字体大小")
+        font_label.setObjectName("settingsRow")
+        font_label.setFixedWidth(80)
+        self.font_value = QLabel(f"{font_scale}%")
+        self.font_value.setObjectName("settingsValue")
+        self.font_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.font_slider = QSlider(Qt.Horizontal)
+        self.font_slider.setRange(80, 140)
+        self.font_slider.setSingleStep(5)
+        self.font_slider.setPageStep(10)
+        self.font_slider.setValue(font_scale)
+        self.font_slider.valueChanged.connect(self._on_font)
+        font_row.addWidget(font_label)
+        font_row.addWidget(self.font_slider, 1)
+        font_row.addWidget(self.font_value)
+        layout.addLayout(font_row)
+
+        bri_row = QHBoxLayout()
+        bri_label = QLabel("界面亮度")
+        bri_label.setObjectName("settingsRow")
+        bri_label.setFixedWidth(80)
+        self.bri_value = QLabel(self._fmt_brightness(brightness))
+        self.bri_value.setObjectName("settingsValue")
+        self.bri_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.bri_slider = QSlider(Qt.Horizontal)
+        self.bri_slider.setRange(-20, 40)
+        self.bri_slider.setSingleStep(5)
+        self.bri_slider.setPageStep(10)
+        self.bri_slider.setValue(brightness)
+        self.bri_slider.valueChanged.connect(self._on_brightness)
+        bri_row.addWidget(bri_label)
+        bri_row.addWidget(self.bri_slider, 1)
+        bri_row.addWidget(self.bri_value)
+        layout.addLayout(bri_row)
+
+        layout.addSpacing(8)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        reset_btn = QPushButton("恢复默认")
+        reset_btn.setObjectName("settingsReset")
+        reset_btn.setCursor(Qt.PointingHandCursor)
+        reset_btn.clicked.connect(self._reset)
+        apply_btn = QPushButton("应用")
+        apply_btn.setObjectName("settingsApply")
+        apply_btn.setCursor(Qt.PointingHandCursor)
+        apply_btn.clicked.connect(self.accept)
+        btn_row.addWidget(reset_btn)
+        btn_row.addSpacing(8)
+        btn_row.addWidget(apply_btn)
+        layout.addLayout(btn_row)
+
+    @staticmethod
+    def _fmt_brightness(v):
+        return f"{v:+d}" if v else "0"
+
+    def _on_font(self, v):
+        v = (v // 5) * 5
+        if v != self.font_slider.value():
+            self.font_slider.blockSignals(True)
+            self.font_slider.setValue(v)
+            self.font_slider.blockSignals(False)
+        self.font_value.setText(f"{v}%")
+        self._on_change(v, self.bri_slider.value())
+
+    def _on_brightness(self, v):
+        v = (v // 5) * 5
+        if v != self.bri_slider.value():
+            self.bri_slider.blockSignals(True)
+            self.bri_slider.setValue(v)
+            self.bri_slider.blockSignals(False)
+        self.bri_value.setText(self._fmt_brightness(v))
+        self._on_change(self.font_slider.value(), v)
+
+    def _reset(self):
+        self.font_slider.setValue(100)
+        self.bri_slider.setValue(0)
+
+    def reject(self):
+        # 取消时还原回弹出前的设置
+        self._on_change(*self._initial)
+        super().reject()
+
+    def values(self):
+        return self.font_slider.value(), self.bri_slider.value()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, api_key):
         super().__init__()
@@ -1212,12 +2139,20 @@ class MainWindow(QMainWindow):
         self.video_thread = None
         self._drag_pos = None
         self._img_ref_data_list = []
-        self._vid_ref_data = None
+        self._vid_img_ref_data_list = []
+        self._vid_video_ref_url_list = []
         self._current_prompt = ""
         self._current_model = ""
         self._current_quality = ""
         self._current_ratio = ""
+        ui = load_ui_settings()
+        self._font_scale = ui["font_scale"]
+        self._brightness = ui["brightness"]
+        self._bg_pages = []
+        self._balance_thread = None
         self.init_ui()
+        self._apply_ui_settings()
+        QTimer.singleShot(300, self.refresh_balance)
 
     def init_ui(self):
         self.setWindowTitle("Glacier AI")
@@ -1233,6 +2168,7 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         central.setStyleSheet("background-color: #0a0e1a;")
+        self._bg_pages.append(central)
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
         root.setSpacing(0)
@@ -1344,7 +2280,7 @@ class MainWindow(QMainWindow):
         title = QLabel("GLACIER ENGINE")
         title.setObjectName("navTitle")
         header_layout.addWidget(title)
-        ver = QLabel("V2.7 Stable")
+        ver = QLabel("V3.0 Stable")
         ver.setObjectName("navVersion")
         ver.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff9f1c;")
         header_layout.addWidget(ver)
@@ -1372,6 +2308,12 @@ class MainWindow(QMainWindow):
 
         nav_layout.addStretch()
 
+        self.nav_settings_btn = QPushButton("  ⚙  设置")
+        self.nav_settings_btn.setObjectName("navBtn")
+        self.nav_settings_btn.setCursor(Qt.PointingHandCursor)
+        self.nav_settings_btn.clicked.connect(self._open_settings)
+        nav_layout.addWidget(self.nav_settings_btn)
+
         bottom = QWidget()
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(16, 12, 16, 16)
@@ -1383,13 +2325,133 @@ class MainWindow(QMainWindow):
         bottom_layout.addWidget(sep)
         bottom_layout.addSpacing(4)
 
+        balance_row = QHBoxLayout()
+        balance_row.setSpacing(6)
+        balance_row.setContentsMargins(0, 0, 0, 0)
+        self.balance_label = QLabel("余额: 加载中...")
+        self.balance_label.setObjectName("navBalanceLabel")
+        self.balance_label.setStyleSheet(
+            "color: #7dd3fc; font-size: 16px; font-weight: 700;"
+        )
+        balance_row.addWidget(self.balance_label, 1)
+
+        self.balance_refresh_btn = QPushButton("⟳")
+        self.balance_refresh_btn.setObjectName("balanceRefreshBtn")
+        self.balance_refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.balance_refresh_btn.setFixedSize(30, 28)
+        self.balance_refresh_btn.setToolTip("刷新余额")
+        self.balance_refresh_btn.setStyleSheet(
+            "QPushButton { background: rgba(125,211,252,0.1); color: #7dd3fc;"
+            " border: 1px solid rgba(125,211,252,0.3); border-radius: 4px;"
+            " font-size: 16px; padding: 0; }"
+            "QPushButton:hover { background: rgba(125,211,252,0.2); }"
+            "QPushButton:disabled { color: #475569; border-color: rgba(125,211,252,0.1); }"
+        )
+        self.balance_refresh_btn.clicked.connect(self.refresh_balance)
+        balance_row.addWidget(self.balance_refresh_btn)
+        bottom_layout.addLayout(balance_row)
+
+        switch_btn = QPushButton("切换账号")
+        switch_btn.setCursor(Qt.PointingHandCursor)
+        switch_btn.setStyleSheet(
+            "QPushButton { background: transparent; color: #94a3b8;"
+            " border: none; font-size: 13px; padding: 4px 2px; text-align: left; }"
+            "QPushButton:hover { color: #cbd5e1; }"
+        )
+        switch_btn.clicked.connect(self._switch_account)
+        bottom_layout.addWidget(switch_btn)
+
         key_display = self.api_key[:8] + "..." + self.api_key[-4:]
         key_label = QLabel(f"Key: {key_display}")
         key_label.setObjectName("navKeyLabel")
+        key_label.setStyleSheet("color: #64748b; font-size: 11px;")
         bottom_layout.addWidget(key_label)
 
         nav_layout.addWidget(bottom)
         parent_layout.addWidget(nav)
+
+    def _apply_ui_settings(self):
+        adjusted = apply_ui_adjustments(DARK_STYLE, self._font_scale, self._brightness)
+        self.setStyleSheet(adjusted)
+        page_bg = shift_inline_bg("#0a0e1a", self._brightness)
+        for w in self._bg_pages:
+            try:
+                w.setStyleSheet(f"background-color: {page_bg};")
+            except Exception:
+                pass
+
+    def _preview_ui_settings(self, font_scale, brightness):
+        self._font_scale = font_scale
+        self._brightness = brightness
+        self._apply_ui_settings()
+
+    def _open_settings(self):
+        before = (self._font_scale, self._brightness)
+        dlg = SettingsDialog(self, self._font_scale, self._brightness, self._preview_ui_settings)
+        if dlg.exec_() == QDialog.Accepted:
+            fs, bri = dlg.values()
+            self._font_scale = fs
+            self._brightness = bri
+            self._apply_ui_settings()
+            save_ui_settings({"font_scale": fs, "brightness": bri})
+        else:
+            self._font_scale, self._brightness = before
+            self._apply_ui_settings()
+
+    def refresh_balance(self):
+        if self._balance_thread is not None and self._balance_thread.isRunning():
+            return
+        self.balance_label.setText("余额: 查询中...")
+        self.balance_refresh_btn.setEnabled(False)
+        thread = BalanceQueryThread(self.api_key)
+        thread.finished_ok.connect(self._on_balance_ok)
+        thread.failed.connect(self._on_balance_failed)
+        thread.finished.connect(lambda: self.balance_refresh_btn.setEnabled(True))
+        self._balance_thread = thread
+        thread.start()
+
+    def _on_balance_ok(self, amount):
+        self.balance_label.setText(f"余额: ¥ {amount:.2f}")
+        self.balance_label.setToolTip(f"账户剩余额度 ¥{amount:.4f}（点击 ⟳ 刷新）")
+
+    def _on_balance_failed(self, msg):
+        self.balance_label.setText("余额: 查询失败")
+        self.balance_label.setToolTip(f"查询失败: {msg}")
+
+    def _switch_account(self):
+        mb = QMessageBox(self)
+        mb.setWindowTitle("切换账号")
+        mb.setText("返回登录窗口选择/输入其他 API Key？")
+        mb.setIcon(QMessageBox.Question)
+        yes_btn = mb.addButton("是", QMessageBox.YesRole)
+        no_btn = mb.addButton("否", QMessageBox.NoRole)
+        mb.setDefaultButton(no_btn)
+        mb.setStyleSheet(
+            "QMessageBox { background-color: #ffffff; min-width: 380px; }"
+            "QMessageBox QLabel { color: #000000; font-size: 17px; padding: 8px 4px; }"
+        )
+        from PyQt5.QtGui import QPalette
+        for btn in (yes_btn, no_btn):
+            btn.setStyleSheet(
+                "QPushButton { color: #000000; background-color: #f1f5f9;"
+                " border: 1px solid #94a3b8; border-radius: 4px;"
+                " padding: 8px 26px; min-width: 96px; font-size: 16px; font-weight: 700; }"
+                "QPushButton:hover { background-color: #cbd5e1; color: #000000; }"
+                "QPushButton:pressed { background-color: #94a3b8; color: #000000; }"
+            )
+            pal = btn.palette()
+            pal.setColor(QPalette.ButtonText, QColor("#000000"))
+            pal.setColor(QPalette.WindowText, QColor("#000000"))
+            pal.setColor(QPalette.Button, QColor("#f1f5f9"))
+            btn.setPalette(pal)
+            f = btn.font()
+            f.setBold(True)
+            f.setPointSize(12)
+            btn.setFont(f)
+            btn.setAutoFillBackground(True)
+        mb.exec_()
+        if mb.clickedButton() is yes_btn:
+            QApplication.exit(1001)
 
     def _switch_nav(self, index):
         self.content_stack.setCurrentIndex(index)
@@ -1403,6 +2465,7 @@ class MainWindow(QMainWindow):
     def _build_image_page(self):
         page = QWidget()
         page.setStyleSheet("background-color: #0a0e1a;")
+        self._bg_pages.append(page)
         layout = QHBoxLayout(page)
         layout.setSpacing(24)
         layout.setContentsMargins(24, 24, 24, 0)
@@ -1451,7 +2514,7 @@ class MainWindow(QMainWindow):
         ref_title.setObjectName("sectionLabel")
         ref_layout.addWidget(ref_title)
 
-        self.img_ref_hint = QLabel("提示：参考图最多 4 张")
+        self.img_ref_hint = QLabel("提示：参考图最多 6 张")
         self.img_ref_hint.setStyleSheet("color: #f59e0b; font-size: 11px;")
         ref_layout.addWidget(self.img_ref_hint)
 
@@ -1503,7 +2566,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(l1, 0, 0)
         self.model_combo = QComboBox()
         setup_combo(self.model_combo)
-        self.model_combo.addItems(["gpt-image-2", "gpt-image-2pro"])
+        self.model_combo.addItems(["gpt-image-2", "gpt-image-2pro", "gemini-3-pro-image-preview"])
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         grid.addWidget(self.model_combo, 1, 0)
 
@@ -1636,6 +2699,7 @@ class MainWindow(QMainWindow):
     def _build_video_page(self):
         page = QWidget()
         page.setStyleSheet("background-color: #0a0e1a;")
+        self._bg_pages.append(page)
         layout = QHBoxLayout(page)
         layout.setSpacing(24)
         layout.setContentsMargins(24, 24, 24, 0)
@@ -1671,6 +2735,7 @@ class MainWindow(QMainWindow):
         self.video_prompt_input.setMinimumHeight(120)
         self.video_prompt_input.setMaximumHeight(160)
         self.video_prompt_input.setAcceptRichText(False)
+        self.video_prompt_input.set_mention_provider(self._mention_candidates)
         pc_layout.addWidget(self.video_prompt_input)
         left_layout.addWidget(prompt_card)
 
@@ -1684,10 +2749,10 @@ class MainWindow(QMainWindow):
         vid_ref_title.setObjectName("sectionLabel")
         vid_ref_layout.addWidget(vid_ref_title)
 
-        self.vid_ref_url = QLineEdit()
-        self.vid_ref_url.setObjectName("refUrlInput")
-        self.vid_ref_url.setPlaceholderText("粘贴图片 URL 或选择本地图片...")
-        vid_ref_layout.addWidget(self.vid_ref_url)
+        self.vid_img_ref_hint = QLabel("")
+        self.vid_img_ref_hint.setStyleSheet("color: #f59e0b; font-size: 11px;")
+        self.vid_img_ref_hint.setWordWrap(True)
+        vid_ref_layout.addWidget(self.vid_img_ref_hint)
 
         vid_btn_row = QHBoxLayout()
         self.vid_ref_pick_btn = QPushButton("选择本地图片")
@@ -1703,13 +2768,103 @@ class MainWindow(QMainWindow):
         vid_btn_row.addWidget(self.vid_ref_clear_btn)
         vid_ref_layout.addLayout(vid_btn_row)
 
-        self.vid_ref_preview = QLabel()
-        self.vid_ref_preview.setAlignment(Qt.AlignCenter)
-        self.vid_ref_preview.setMaximumHeight(160)
-        self.vid_ref_preview.setStyleSheet("border: none; background: transparent;")
-        vid_ref_layout.addWidget(self.vid_ref_preview)
+        self.vid_img_ref_preview_layout = QGridLayout()
+        self.vid_img_ref_preview_layout.setSpacing(6)
+        self.vid_img_ref_preview_layout.setAlignment(Qt.AlignLeft)
+        vid_ref_layout.addLayout(self.vid_img_ref_preview_layout)
+
+        self.vid_img_ref_count_label = QLabel("")
+        self.vid_img_ref_count_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        vid_ref_layout.addWidget(self.vid_img_ref_count_label)
 
         left_layout.addWidget(vid_ref_card)
+
+        self.vid_video_ref_card = QFrame()
+        self.vid_video_ref_card.setObjectName("glassPanel")
+        vvr_layout = QVBoxLayout(self.vid_video_ref_card)
+        vvr_layout.setSpacing(10)
+        vvr_layout.setContentsMargins(20, 20, 20, 20)
+
+        self.vid_video_ref_title = QLabel("参考视频（可选）")
+        self.vid_video_ref_title.setObjectName("sectionLabel")
+        vvr_layout.addWidget(self.vid_video_ref_title)
+
+        self.vid_video_ref_hint = QLabel("")
+        self.vid_video_ref_hint.setStyleSheet("color: #f59e0b; font-size: 11px;")
+        self.vid_video_ref_hint.setWordWrap(True)
+        vvr_layout.addWidget(self.vid_video_ref_hint)
+
+        vvr_input_row = QHBoxLayout()
+        self.vid_video_ref_input = QLineEdit()
+        self.vid_video_ref_input.setObjectName("refUrlInput")
+        self.vid_video_ref_input.setPlaceholderText("粘贴视频 URL 后点击 + 添加")
+        self.vid_video_ref_input.returnPressed.connect(self.on_add_vid_video_ref)
+        vvr_input_row.addWidget(self.vid_video_ref_input)
+        self.vid_video_ref_add_btn = QPushButton("添加")
+        self.vid_video_ref_add_btn.setObjectName("refBtn")
+        self.vid_video_ref_add_btn.setFixedWidth(60)
+        self.vid_video_ref_add_btn.setStyleSheet("font-size: 13px;")
+        self.vid_video_ref_add_btn.setCursor(Qt.PointingHandCursor)
+        self.vid_video_ref_add_btn.clicked.connect(self.on_add_vid_video_ref)
+        vvr_input_row.addWidget(self.vid_video_ref_add_btn)
+        vvr_layout.addLayout(vvr_input_row)
+
+        self.vid_video_ref_list_layout = QVBoxLayout()
+        self.vid_video_ref_list_layout.setSpacing(4)
+        vvr_layout.addLayout(self.vid_video_ref_list_layout)
+
+        self.vid_video_ref_count_label = QLabel("")
+        self.vid_video_ref_count_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        vvr_layout.addWidget(self.vid_video_ref_count_label)
+
+        left_layout.addWidget(self.vid_video_ref_card)
+
+        self.vid_keyframe_card = QFrame()
+        self.vid_keyframe_card.setObjectName("glassPanel")
+        kf_layout = QVBoxLayout(self.vid_keyframe_card)
+        kf_layout.setSpacing(10)
+        kf_layout.setContentsMargins(20, 20, 20, 20)
+
+        kf_title = QLabel("首尾帧（Kling 专属，可选）")
+        kf_title.setObjectName("sectionLabel")
+        kf_layout.addWidget(kf_title)
+
+        kf_hint = QLabel("提示：首尾帧模式需同时上传首帧和尾帧")
+        kf_hint.setStyleSheet("color: #f59e0b; font-size: 11px;")
+        kf_hint.setWordWrap(True)
+        kf_layout.addWidget(kf_hint)
+
+        kf_slots_row = QHBoxLayout()
+        kf_slots_row.setSpacing(12)
+
+        self._vid_start_frame = {"url": None, "bytes": None, "uploading": False}
+        self._vid_end_frame = {"url": None, "bytes": None, "uploading": False}
+
+        for tag, label_text in (("start", "首帧"), ("end", "尾帧")):
+            slot_col = QVBoxLayout()
+            slot_col.setSpacing(4)
+            lbl_text = QLabel(label_text)
+            lbl_text.setStyleSheet("color: #94a3b8; font-size: 11px;")
+            slot_col.addWidget(lbl_text, alignment=Qt.AlignCenter)
+            thumb = QLabel("点击选择")
+            thumb.setFixedSize(110, 110)
+            thumb.setAlignment(Qt.AlignCenter)
+            thumb.setStyleSheet("border: 1px dashed rgba(125,211,252,0.4); border-radius: 6px; color:#94a3b8; font-size:12px; background: rgba(125,211,252,0.04);")
+            thumb.setCursor(Qt.PointingHandCursor)
+            thumb.mousePressEvent = lambda ev, t=tag: self.on_pick_keyframe(t)
+            setattr(self, f"_vid_{tag}_frame_thumb", thumb)
+            slot_col.addWidget(thumb, alignment=Qt.AlignCenter)
+            clear_btn = QPushButton("清除")
+            clear_btn.setFixedSize(110, 20)
+            clear_btn.setCursor(Qt.PointingHandCursor)
+            clear_btn.setStyleSheet("background: rgba(255,107,107,0.2); color: #ff6b6b; border: none; border-radius: 3px; font-size: 10px;")
+            clear_btn.clicked.connect(lambda checked, t=tag: self.on_clear_keyframe(t))
+            slot_col.addWidget(clear_btn, alignment=Qt.AlignCenter)
+            kf_slots_row.addLayout(slot_col)
+        kf_slots_row.addStretch()
+        kf_layout.addLayout(kf_slots_row)
+
+        left_layout.addWidget(self.vid_keyframe_card)
 
         param_card = QFrame()
         param_card.setObjectName("glassPanel")
@@ -1729,7 +2884,8 @@ class MainWindow(QMainWindow):
         grid.addWidget(l1, 0, 0)
         self.video_model_combo = QComboBox()
         setup_combo(self.video_model_combo)
-        self.video_model_combo.addItems(["sora-2"])
+        self.video_model_combo.addItems(VIDEO_MODELS)
+        self.video_model_combo.currentTextChanged.connect(self.on_video_model_changed)
         grid.addWidget(self.video_model_combo, 1, 0)
 
         l2 = QLabel("画面方向")
@@ -1755,6 +2911,14 @@ class MainWindow(QMainWindow):
         setup_combo(self.vid_count_combo)
         self.vid_count_combo.addItems([str(i) for i in range(1, 6)])
         grid.addWidget(self.vid_count_combo, 3, 1)
+
+        self.vid_size_label = QLabel("画质")
+        self.vid_size_label.setObjectName("paramLabel")
+        grid.addWidget(self.vid_size_label, 4, 0)
+        self.vid_size_combo = QComboBox()
+        setup_combo(self.vid_size_combo)
+        self.vid_size_combo.addItems(["自适应", "large", "small"])
+        grid.addWidget(self.vid_size_combo, 5, 0)
 
         pm_layout.addLayout(grid)
         pm_layout.addSpacing(8)
@@ -1854,6 +3018,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(left_scroll, 4)
         layout.addLayout(right, 6)
         self.content_stack.addWidget(page)
+        self.on_video_model_changed(self.video_model_combo.currentText())
 
     def _build_footer(self, parent_layout):
         footer = QFrame()
@@ -1868,7 +3033,7 @@ class MainWindow(QMainWindow):
 
         fl.addStretch()
 
-        brand = QLabel("GLACIER-OS CORE V2.7.0")
+        brand = QLabel("GLACIER-OS CORE V3.0")
         brand.setObjectName("footerBrand")
         fl.addWidget(brand)
 
@@ -1926,20 +3091,20 @@ class MainWindow(QMainWindow):
         preview_label.clear()
 
     def on_pick_img_ref(self):
-        if len(self._img_ref_data_list) >= 4:
-            QMessageBox.warning(self, "提示", "最多支持 4 张参考图片")
+        if len(self._img_ref_data_list) >= 6:
+            QMessageBox.warning(self, "提示", "最多支持 6 张参考图片")
             return
         if not self.api_key:
             QMessageBox.warning(self, "提示", "请先在右上角设置 API Key")
             return
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "选择参考图片（最多4张）",
+            self, "选择参考图片（最多6张）",
             os.path.join(os.path.expanduser("~"), "Desktop"),
             "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp);;所有文件 (*)"
         )
         if not paths:
             return
-        slots_left = 4 - len(self._img_ref_data_list)
+        slots_left = 6 - len(self._img_ref_data_list)
         paths = paths[:slots_left]
         if not hasattr(self, "_upload_threads"):
             self._upload_threads = []
@@ -2029,9 +3194,9 @@ class MainWindow(QMainWindow):
         count = len(self._img_ref_data_list)
         uploading_count = sum(1 for s in self._img_ref_data_list if s.get("uploading"))
         if uploading_count:
-            self.img_ref_count_label.setText(f"已选择 {count}/4 张（上传中 {uploading_count}）")
+            self.img_ref_count_label.setText(f"已选择 {count}/6 张（上传中 {uploading_count}）")
         else:
-            self.img_ref_count_label.setText(f"已选择 {count}/4 张" if count > 0 else "")
+            self.img_ref_count_label.setText(f"已选择 {count}/6 张" if count > 0 else "")
         self.img_ref_url.setText(f"已选择 {count} 张参考图" if count > 0 else "")
 
     def _remove_img_ref(self, index):
@@ -2042,15 +3207,350 @@ class MainWindow(QMainWindow):
             self.model_combo.setEnabled(True)
 
     def on_pick_vid_ref(self):
-        self._pick_ref_image(self.vid_ref_url, self.vid_ref_preview, '_vid_ref_data')
+        max_imgs = self._current_max_images()
+        if len(self._vid_img_ref_data_list) >= max_imgs:
+            QMessageBox.warning(self, "提示", f"当前模型最多支持 {max_imgs} 张参考图片")
+            return
+        if not self.api_key:
+            QMessageBox.warning(self, "提示", "请先在右上角设置 API Key")
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, f"选择参考图片（最多{max_imgs}张）",
+            os.path.join(os.path.expanduser("~"), "Desktop"),
+            "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp);;所有文件 (*)"
+        )
+        if not paths:
+            return
+        slots_left = max_imgs - len(self._vid_img_ref_data_list)
+        paths = paths[:slots_left]
+        if not hasattr(self, "_upload_threads"):
+            self._upload_threads = []
+
+        for path in paths:
+            placeholder = {"url": None, "bytes": None, "name": os.path.basename(path), "uploading": True, "error": None}
+            self._vid_img_ref_data_list.append(placeholder)
+            tag = f"vid_img_ref_{id(placeholder)}"
+            thread = UploadRefImageThread(self.api_key, path, tag=tag)
+
+            def _on_ok(_tag, url, img_bytes, slot=placeholder, th=thread):
+                slot["url"] = url
+                slot["bytes"] = img_bytes
+                slot["uploading"] = False
+                self._refresh_vid_img_ref_preview()
+                if th in self._upload_threads:
+                    self._upload_threads.remove(th)
+
+            def _on_fail(_tag, msg, slot=placeholder, th=thread):
+                slot["uploading"] = False
+                slot["error"] = msg
+                if slot in self._vid_img_ref_data_list:
+                    self._vid_img_ref_data_list.remove(slot)
+                self._refresh_vid_img_ref_preview()
+                QMessageBox.warning(self, "上传失败", f"{slot['name']}: {msg}")
+                if th in self._upload_threads:
+                    self._upload_threads.remove(th)
+
+            thread.finished_ok.connect(_on_ok)
+            thread.failed.connect(_on_fail)
+            self._upload_threads.append(thread)
+            thread.start()
+
+        self._refresh_vid_img_ref_preview()
 
     def on_clear_vid_ref(self):
-        self._clear_ref_image(self.vid_ref_url, self.vid_ref_preview, '_vid_ref_data')
+        self._vid_img_ref_data_list.clear()
+        self._refresh_vid_img_ref_preview()
+
+    def _refresh_vid_img_ref_preview(self):
+        while self.vid_img_ref_preview_layout.count():
+            w = self.vid_img_ref_preview_layout.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        thumb_size = 90
+        is_sd = self.video_model_combo.currentText().startswith("sd-2")
+        for i, slot in enumerate(self._vid_img_ref_data_list):
+            img_bytes = slot.get("bytes")
+            uploading = slot.get("uploading")
+            if img_bytes is None and not uploading:
+                continue
+
+            container = QWidget()
+            container.setFixedSize(thumb_size + 4, thumb_size + (40 if is_sd else 22))
+            container.setStyleSheet("background: transparent;")
+            cl = QVBoxLayout(container)
+            cl.setContentsMargins(0, 0, 0, 0)
+            cl.setSpacing(2)
+            img_lbl = QLabel()
+            img_lbl.setFixedSize(thumb_size, thumb_size)
+            img_lbl.setAlignment(Qt.AlignCenter)
+            img_lbl.setStyleSheet("border: 1px solid rgba(125,211,252,0.3); border-radius: 4px; color:#94a3b8; font-size:11px;")
+
+            if img_bytes:
+                qimg = QImage.fromData(img_bytes)
+                if not qimg.isNull():
+                    pixmap = QPixmap.fromImage(qimg)
+                    cropped = pixmap.scaled(thumb_size, thumb_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    x = (cropped.width() - thumb_size) // 2
+                    y = (cropped.height() - thumb_size) // 2
+                    cropped = cropped.copy(x, y, thumb_size, thumb_size)
+                    img_lbl.setPixmap(cropped)
+            else:
+                img_lbl.setText("上传中...")
+            cl.addWidget(img_lbl, alignment=Qt.AlignCenter)
+
+            if is_sd:
+                ins_btn = QPushButton(f"插入 @图片{i+1}")
+                ins_btn.setFixedSize(thumb_size, 18)
+                ins_btn.setCursor(Qt.PointingHandCursor)
+                ins_btn.setStyleSheet("background: rgba(125,211,252,0.18); color: #7dd3fc; border: none; border-radius: 3px; font-size: 10px;")
+                ins_btn.clicked.connect(lambda checked, n=i+1: self._insert_ref_token(f"@图片{n}"))
+                cl.addWidget(ins_btn, alignment=Qt.AlignCenter)
+
+            del_btn = QPushButton("删除")
+            del_btn.setFixedSize(thumb_size, 18)
+            del_btn.setCursor(Qt.PointingHandCursor)
+            del_btn.setStyleSheet("background: rgba(255,107,107,0.2); color: #ff6b6b; border: none; border-radius: 3px; font-size: 10px;")
+            del_btn.clicked.connect(lambda checked, x=i: self._remove_vid_img_ref(x))
+            cl.addWidget(del_btn, alignment=Qt.AlignCenter)
+            row, col = divmod(i, 3)
+            self.vid_img_ref_preview_layout.addWidget(container, row, col)
+        count = len(self._vid_img_ref_data_list)
+        uploading_count = sum(1 for s in self._vid_img_ref_data_list if s.get("uploading"))
+        max_imgs = 1 if self.video_model_combo.currentText() == "sora-2" else 4
+        if uploading_count:
+            self.vid_img_ref_count_label.setText(f"已选择 {count}/{max_imgs} 张（上传中 {uploading_count}）")
+        else:
+            self.vid_img_ref_count_label.setText(f"已选择 {count}/{max_imgs} 张" if count > 0 else "")
+
+    def _remove_vid_img_ref(self, index):
+        if 0 <= index < len(self._vid_img_ref_data_list):
+            self._vid_img_ref_data_list.pop(index)
+        self._refresh_vid_img_ref_preview()
+
+    def on_add_vid_video_ref(self):
+        url = self.vid_video_ref_input.text().strip()
+        if not url:
+            return
+        if len(self._vid_video_ref_url_list) >= 3:
+            QMessageBox.warning(self, "提示", "最多支持 3 条参考视频")
+            return
+        if not (url.startswith("http://") or url.startswith("https://")):
+            QMessageBox.warning(self, "提示", "请填写完整的 http(s) URL")
+            return
+        self._vid_video_ref_url_list.append(url)
+        self.vid_video_ref_input.clear()
+        self._refresh_vid_video_ref_list()
+
+    def _remove_vid_video_ref(self, index):
+        if 0 <= index < len(self._vid_video_ref_url_list):
+            self._vid_video_ref_url_list.pop(index)
+        self._refresh_vid_video_ref_list()
+
+    def _refresh_vid_video_ref_list(self):
+        while self.vid_video_ref_list_layout.count():
+            w = self.vid_video_ref_list_layout.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        for i, url in enumerate(self._vid_video_ref_url_list):
+            row = QWidget()
+            row.setStyleSheet("background: transparent;")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            tag = QLabel(f"@视频{i+1}")
+            tag.setStyleSheet("color: #7dd3fc; font-size: 11px; min-width: 50px;")
+            rl.addWidget(tag)
+            url_lbl = QLabel(url)
+            url_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
+            url_lbl.setToolTip(url)
+            url_lbl.setMaximumWidth(220)
+            url_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            rl.addWidget(url_lbl, 1)
+            ins_btn = QPushButton("插入")
+            ins_btn.setFixedSize(40, 20)
+            ins_btn.setCursor(Qt.PointingHandCursor)
+            ins_btn.setStyleSheet("background: rgba(125,211,252,0.18); color: #7dd3fc; border: none; border-radius: 3px; font-size: 10px;")
+            ins_btn.clicked.connect(lambda checked, n=i+1: self._insert_ref_token(f"@视频{n}"))
+            rl.addWidget(ins_btn)
+            del_btn = QPushButton("×")
+            del_btn.setFixedSize(20, 20)
+            del_btn.setCursor(Qt.PointingHandCursor)
+            del_btn.setStyleSheet("background: rgba(255,107,107,0.2); color: #ff6b6b; border: none; border-radius: 3px; font-size: 12px;")
+            del_btn.clicked.connect(lambda checked, x=i: self._remove_vid_video_ref(x))
+            rl.addWidget(del_btn)
+            self.vid_video_ref_list_layout.addWidget(row)
+        count = len(self._vid_video_ref_url_list)
+        self.vid_video_ref_count_label.setText(f"已添加 {count}/3 条" if count > 0 else "")
+
+    def _insert_ref_token(self, token):
+        cursor = self.video_prompt_input.textCursor()
+        cursor.insertText(token)
+        self.video_prompt_input.setFocus()
+
+    def _mention_candidates(self):
+        model = self.video_model_combo.currentText() if hasattr(self, "video_model_combo") else ""
+        if model == "sora-2":
+            return []
+        cands = []
+        n_imgs = sum(1 for s in self._vid_img_ref_data_list if s.get("url"))
+        for i in range(1, n_imgs + 1):
+            cands.append(f"图片{i}")
+        n_vids = len(self._vid_video_ref_url_list)
+        for i in range(1, n_vids + 1):
+            cands.append(f"视频{i}")
+        return cands
+
+    def on_pick_keyframe(self, tag):
+        if not self.api_key:
+            QMessageBox.warning(self, "提示", "请先在右上角设置 API Key")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"选择{('首帧' if tag == 'start' else '尾帧')}图片",
+            os.path.join(os.path.expanduser("~"), "Desktop"),
+            "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp);;所有文件 (*)"
+        )
+        if not path:
+            return
+        slot = self._vid_start_frame if tag == "start" else self._vid_end_frame
+        slot["uploading"] = True
+        slot["name"] = os.path.basename(path)
+        self._refresh_keyframe_thumb(tag)
+
+        if not hasattr(self, "_upload_threads"):
+            self._upload_threads = []
+        thread = UploadRefImageThread(self.api_key, path, tag=f"kf_{tag}_{id(slot)}")
+
+        def _on_ok(_tag, url, img_bytes, s=slot, th=thread, t=tag):
+            s["url"] = url
+            s["bytes"] = img_bytes
+            s["uploading"] = False
+            self._refresh_keyframe_thumb(t)
+            if th in self._upload_threads:
+                self._upload_threads.remove(th)
+
+        def _on_fail(_tag, msg, s=slot, th=thread, t=tag):
+            s["uploading"] = False
+            s["url"] = None
+            s["bytes"] = None
+            self._refresh_keyframe_thumb(t)
+            QMessageBox.warning(self, "上传失败", f"{s.get('name','')}: {msg}")
+            if th in self._upload_threads:
+                self._upload_threads.remove(th)
+
+        thread.finished_ok.connect(_on_ok)
+        thread.failed.connect(_on_fail)
+        self._upload_threads.append(thread)
+        thread.start()
+
+    def on_clear_keyframe(self, tag):
+        slot = self._vid_start_frame if tag == "start" else self._vid_end_frame
+        slot["url"] = None
+        slot["bytes"] = None
+        slot["uploading"] = False
+        self._refresh_keyframe_thumb(tag)
+
+    def _refresh_keyframe_thumb(self, tag):
+        slot = self._vid_start_frame if tag == "start" else self._vid_end_frame
+        thumb = getattr(self, f"_vid_{tag}_frame_thumb")
+        if slot.get("uploading"):
+            thumb.setText("上传中...")
+            thumb.setPixmap(QPixmap())
+            return
+        img_bytes = slot.get("bytes")
+        if img_bytes:
+            qimg = QImage.fromData(img_bytes)
+            if not qimg.isNull():
+                pm = QPixmap.fromImage(qimg).scaled(110, 110, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                x = max(0, (pm.width() - 110) // 2)
+                y = max(0, (pm.height() - 110) // 2)
+                thumb.setPixmap(pm.copy(x, y, 110, 110))
+                thumb.setText("")
+                return
+        thumb.setText("点击选择")
+        thumb.setPixmap(QPixmap())
+
+    def on_video_model_changed(self, model):
+        prev_dur = self.video_duration_combo.currentText()
+        self.video_duration_combo.clear()
+        durations = VIDEO_MODEL_DURATIONS.get(model, VIDEO_DURATIONS)
+        self.video_duration_combo.addItems(durations)
+        if prev_dur in durations:
+            self.video_duration_combo.setCurrentText(prev_dur)
+
+        prev_orient = self.video_size_combo.currentText()
+        self.video_size_combo.clear()
+        orientations = VIDEO_MODEL_ORIENTATIONS.get(model, VIDEO_SIZES)
+        self.video_size_combo.addItems(list(orientations.keys()))
+        if prev_orient in orientations:
+            self.video_size_combo.setCurrentText(prev_orient)
+
+        is_sd = model.startswith("sd-2")
+        is_kling = model == "Kling Omni"
+
+        if is_sd:
+            self.vid_video_ref_card.setVisible(True)
+            self.vid_video_ref_title.setText("参考视频（可选）")
+            self.vid_video_ref_hint.setText("提示：最多 3 条，单视频 720–2160px，总大小 ≤200 MB，总时长 ≤15s，必须公网 URL")
+        elif is_kling:
+            self.vid_video_ref_card.setVisible(True)
+            self.vid_video_ref_title.setText("参考视频（可选）")
+            self.vid_video_ref_hint.setText("提示：最多 1 条公网 URL；选了视频后图片上限降为 4 张")
+        else:
+            self.vid_video_ref_card.setVisible(False)
+
+        self.vid_size_label.setVisible(is_sd or is_kling)
+        self.vid_size_combo.setVisible(is_sd or is_kling)
+        self.vid_keyframe_card.setVisible(is_kling)
+
+        if model == "sora-2":
+            self.vid_img_ref_hint.setText("提示：sora-2 仅支持 1 张参考图片")
+        elif is_sd:
+            self.vid_img_ref_hint.setText("提示：最多 4 张，单图 ≤5 MB，总 ≤20 MB；prompt 中可用 @1 @2... 引用")
+        elif is_kling:
+            self.vid_img_ref_hint.setText("提示：最多 7 张（带视频时降为 4 张）")
+
+        max_imgs = self._current_max_images()
+        max_vids = self._current_max_videos()
+        if len(self._vid_img_ref_data_list) > max_imgs:
+            self._vid_img_ref_data_list[:] = self._vid_img_ref_data_list[:max_imgs]
+        if len(self._vid_video_ref_url_list) > max_vids:
+            self._vid_video_ref_url_list[:] = self._vid_video_ref_url_list[:max_vids]
+
+        self._refresh_vid_img_ref_preview()
+        self._refresh_vid_video_ref_list()
+        self._refresh_keyframe_thumb("start")
+        self._refresh_keyframe_thumb("end")
+
+    def _current_max_images(self):
+        model = self.video_model_combo.currentText()
+        has_video = len(self._vid_video_ref_url_list) > 0
+        if has_video:
+            return VIDEO_MODEL_MAX_IMAGES_WITH_VIDEO.get(model, 4)
+        return VIDEO_MODEL_MAX_IMAGES_BASE.get(model, 4)
+
+    def _current_max_videos(self):
+        model = self.video_model_combo.currentText()
+        return VIDEO_MODEL_MAX_VIDEOS.get(model, 0)
 
     def on_model_changed(self, model):
         self.quality_combo.clear()
         qualities = MODEL_QUALITY.get(model, ["1k"])
         self.quality_combo.addItems(qualities)
+
+        current_ratio = self.size_combo.currentText()
+        self.size_combo.blockSignals(True)
+        self.size_combo.clear()
+        if model in GEMINI_MODELS:
+            self.size_combo.addItems(GEMINI_RATIO_LIST)
+            if current_ratio in GEMINI_RATIO_LIST:
+                self.size_combo.setCurrentText(current_ratio)
+            else:
+                self.size_combo.setCurrentText("1:1")
+        else:
+            self.size_combo.addItems(RATIO_LIST)
+            if current_ratio in RATIO_LIST:
+                self.size_combo.setCurrentText(current_ratio)
+        self.size_combo.blockSignals(False)
 
     def on_generate(self):
         prompt = self.prompt_input.toPlainText().strip()
@@ -2077,10 +3577,21 @@ class MainWindow(QMainWindow):
         self._start_search_anim()
         model = self.model_combo.currentText()
         img_ref_urls = [s["url"] for s in self._img_ref_data_list if s.get("url")]
+
+        if model in GEMINI_MODELS and len(img_ref_urls) > GEMINI_MAX_REFERENCE_IMAGES:
+            self.gen_btn.setEnabled(True)
+            self.gen_btn.setText("⚡  生成图片")
+            self._stop_search_anim()
+            QMessageBox.warning(self, "提示", f"{model} 最多支持 {GEMINI_MAX_REFERENCE_IMAGES} 张参考图，请删除多余的参考图后重试")
+            return
+
         img_ref = img_ref_urls if img_ref_urls else None
         ratio = self.size_combo.currentText()
         quality = self.quality_combo.currentText()
-        actual_size = SIZE_MAP.get(ratio, {}).get(quality, "1024x1024")
+        if model in GEMINI_MODELS:
+            actual_size = GEMINI_SIZE_MAP.get(ratio, {}).get(quality, "1024x1024")
+        else:
+            actual_size = SIZE_MAP.get(ratio, {}).get(quality, "1024x1024")
         self._current_prompt = prompt
         self._current_model = model
         self._current_quality = quality
@@ -2136,6 +3647,7 @@ class MainWindow(QMainWindow):
         self._stop_search_anim()
         if self.image_data_list:
             self._save_to_history()
+        self.refresh_balance()
 
     def _start_search_anim(self):
         if not hasattr(self, "_search_anim_phase"):
@@ -2239,6 +3751,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请输入提示词")
             return
 
+        model = self.video_model_combo.currentText()
+        limit = VIDEO_PROMPT_LIMIT.get(model)
+        if limit and len(prompt) > limit:
+            QMessageBox.warning(self, "提示", f"{model} 提示词不能超过 {limit} 字（当前 {len(prompt)} 字）")
+            return
+
+        if any(s.get("uploading") for s in self._vid_img_ref_data_list):
+            QMessageBox.warning(self, "提示", "参考图正在上传，请稍候")
+            return
+
         count = int(self.vid_count_combo.currentText())
         self.video_gen_btn.setEnabled(False)
         self.video_gen_btn.setText("生成中...")
@@ -2253,22 +3775,42 @@ class MainWindow(QMainWindow):
             w = self.vid_results_layout.takeAt(0).widget()
             if w:
                 w.deleteLater()
-        self.footer_status.setText(f"正在使用 sora-2 生成 {count} 个视频...")
+        self.footer_status.setText(f"正在使用 {model} 生成 {count} 个视频...")
         self._start_search_anim()
 
         size_label = self.video_size_combo.currentText()
         size_value = VIDEO_SIZES.get(size_label, "landscape")
 
         self._current_video_prompt = prompt
+        self._current_video_model = model
         self._current_video_orientation = size_label
         self._current_video_duration = self.video_duration_combo.currentText()
 
-        vid_ref = self._vid_ref_data
+        vid_img_urls = [s["url"] for s in self._vid_img_ref_data_list if s.get("url")]
+        vid_video_urls = list(self._vid_video_ref_url_list)
+        is_kling = model == "Kling Omni"
+        size_choice = self.vid_size_combo.currentText() if (model.startswith("sd-2") or is_kling) else ""
+        sd_size = size_choice if size_choice in ("large", "small") else None
+
+        start_url = self._vid_start_frame.get("url") if is_kling else None
+        end_url = self._vid_end_frame.get("url") if is_kling else None
+        if is_kling and bool(start_url) != bool(end_url):
+            QMessageBox.warning(self, "提示", "首尾帧模式需要同时上传首帧和尾帧")
+            self.video_gen_btn.setEnabled(True)
+            self.video_gen_btn.setText("⚡  生成视频")
+            self._stop_search_anim()
+            return
+
         self.video_thread = VideoGenerateThread(
             self.api_key, prompt, size_value,
             self.video_duration_combo.currentText(),
             count,
-            image_url=vid_ref
+            image_url=vid_img_urls if vid_img_urls else None,
+            model=model,
+            video_refs=vid_video_urls if vid_video_urls else None,
+            sd_size=sd_size,
+            start_image_url=start_url,
+            end_image_url=end_url,
         )
         self.video_thread.one_finished.connect(self.on_one_video_ready)
         self.video_thread.progress.connect(self.on_video_progress)
@@ -2291,14 +3833,28 @@ class MainWindow(QMainWindow):
         self.footer_status.setText(f"已完成 {self._vid_done_count}/{self._vid_total} 个视频")
 
         card = ClickableLabel(vid_bytes, file_ext="mp4", is_video=True)
-        card.setText(f"🎬\n\n视频 {index+1}\n{size_str}")
+        thumb_bytes = extract_video_first_frame_bytes(vid_bytes)
+        thumb_pixmap = None
+        if thumb_bytes:
+            qimg = QImage.fromData(thumb_bytes)
+            if not qimg.isNull():
+                pm = QPixmap.fromImage(qimg)
+                thumb_pixmap = pm.scaled(150, 150, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                w = thumb_pixmap.width()
+                h = thumb_pixmap.height()
+                thumb_pixmap = thumb_pixmap.copy(max(0, (w - 150) // 2), max(0, (h - 150) // 2), 150, 150)
+        if thumb_pixmap:
+            card.setPixmap(thumb_pixmap)
+            card.setText("")
+        else:
+            card.setText(f"🎬\n\n视频 {index+1}\n{size_str}")
         card._vid_style_base = """
-            QLabel { border: 2px solid transparent; border-radius: 8px; padding: 8px;
+            QLabel { border: 2px solid transparent; border-radius: 8px; padding: 0px;
                      background-color: rgba(15, 21, 36, 0.4); color: #a0b4c4; font-size: 13px; }
             QLabel:hover { border-color: rgba(125, 211, 252, 0.3); background-color: rgba(125, 211, 252, 0.05); }
         """
         card._vid_style_checked = """
-            QLabel { border: 3px solid #7dd3fc; border-radius: 8px; padding: 8px;
+            QLabel { border: 3px solid #7dd3fc; border-radius: 8px; padding: 0px;
                      background-color: rgba(125, 211, 252, 0.08); color: #a0b4c4; font-size: 13px; }
         """
         card.setStyleSheet(card._vid_style_base)
@@ -2325,6 +3881,7 @@ class MainWindow(QMainWindow):
         self._stop_search_anim()
         self.vid_placeholder_title.setText("等待生成")
         self.vid_placeholder_desc.setText("输入提示词并调整参数，生成高质量 AI 视频")
+        self.refresh_balance()
 
     def on_select_all_videos(self):
         all_checked = True
@@ -2405,9 +3962,16 @@ class MainWindow(QMainWindow):
             with open(filepath, "wb") as f:
                 f.write(data)
             video_paths.append(filename)
+            try:
+                thumb_bytes = extract_video_first_frame_bytes(data)
+                if thumb_bytes:
+                    with open(filepath + ".thumb.png", "wb") as tf:
+                        tf.write(thumb_bytes)
+            except Exception:
+                pass
         add_video_history_record(
             getattr(self, "_current_video_prompt", ""),
-            "sora-2",
+            getattr(self, "_current_video_model", "sora-2"),
             getattr(self, "_current_video_orientation", ""),
             getattr(self, "_current_video_duration", ""),
             video_paths,
@@ -2416,6 +3980,7 @@ class MainWindow(QMainWindow):
     def _build_history_page(self):
         page = QWidget()
         page.setStyleSheet("background-color: #0a0e1a;")
+        self._bg_pages.append(page)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
@@ -2502,11 +4067,23 @@ class MainWindow(QMainWindow):
                 if is_video_record or ext == "mp4":
                     raw_bytes = open(img_path, "rb").read()
                     lbl = ClickableLabel(raw_bytes, file_ext="mp4", is_video=True)
-                    lbl.setText("🎬")
-                    lbl.setStyleSheet(
-                        "color:#7dd3fc; font-size:32px; background:rgba(125,211,252,0.08);"
-                        "border:1px solid rgba(125,211,252,0.3); border-radius:6px;"
-                    )
+                    thumb_path = get_or_make_thumb_for_video(img_path)
+                    thumb_pixmap = QPixmap(thumb_path) if thumb_path else QPixmap()
+                    if not thumb_pixmap.isNull():
+                        scaled = thumb_pixmap.scaled(80, 80, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                        x = max(0, (scaled.width() - 80) // 2)
+                        y = max(0, (scaled.height() - 80) // 2)
+                        lbl.setPixmap(scaled.copy(x, y, 80, 80))
+                        lbl.setStyleSheet(
+                            "background:rgba(125,211,252,0.08);"
+                            "border:1px solid rgba(125,211,252,0.3); border-radius:6px;"
+                        )
+                    else:
+                        lbl.setText("🎬")
+                        lbl.setStyleSheet(
+                            "color:#7dd3fc; font-size:32px; background:rgba(125,211,252,0.08);"
+                            "border:1px solid rgba(125,211,252,0.3); border-radius:6px;"
+                        )
                     lbl.setFixedSize(80, 80)
                     lbl._hist_file = img_file
                     thumb_labels.append(lbl)
@@ -2623,10 +4200,21 @@ if __name__ == "__main__":
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 9))
 
-    dlg = KeyDialog()
-    if dlg.exec_() != QDialog.Accepted:
-        sys.exit(0)
+    while True:
+        saved = load_api_key()
+        dlg = KeyDialog(prefill_key=saved)
+        if dlg.exec_() != QDialog.Accepted:
+            sys.exit(0)
+        api_key = dlg.get_key()
+        if dlg.should_remember():
+            save_api_key(api_key)
+        else:
+            clear_api_key()
 
-    window = MainWindow(dlg.get_key())
-    window.show()
-    sys.exit(app.exec_())
+        window = MainWindow(api_key)
+        window.show()
+        exit_code = app.exec_()
+        if exit_code == 1001:
+            window.deleteLater()
+            continue
+        sys.exit(exit_code)
