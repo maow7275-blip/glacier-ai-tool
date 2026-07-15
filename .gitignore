@@ -26,3 +26,7 @@ Thumbs.db
 debug_output.log
 history/
 *.log
+
+# Secrets
+api_key.dat
+ui_settings.json
