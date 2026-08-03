@@ -14,9 +14,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13
-            arch: intel
-            arch_label: Intel
           - runner: macos-14
             arch: arm64
             arch_label: Apple Silicon
@@ -31,6 +28,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
