@@ -39,7 +39,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='GlacierAI_V3.4',
+    name='GlacierAI_V3.5',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
