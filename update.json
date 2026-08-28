@@ -1,8 +1,8 @@
 {
-  "version": "3.8.0",
-  "notes": "恢复 minimax-h3 视频模型；保留 grok-imagine-video-1.5 与 sd-2.5 系列；修复 @ 素材引用按键处理。",
+  "version": "3.8.1",
+  "notes": "新增 gpt-image-2pro-4k；修复代理环境下图片结果下载问题；增加下载重试与失败历史记录。",
   "windows": {
-    "url": "https://github.com/maow7275-blip/glacier-ai-tool/releases/download/v3.8/GlacierAI_V3.8.exe",
-    "sha256": "7c815b62664e1af3499b621d7fefb3879002ec96b06c06345d690ffec6d194c4"
+    "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V3.8.1.exe",
+    "sha256": "5f8e3af91d0169902734186037a3b97dfc3ebe0ff6c9855c8979c336f8df9579"
   }
 }
