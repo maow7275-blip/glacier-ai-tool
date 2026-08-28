@@ -25,7 +25,10 @@ from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinear
 
 
 APP_VERSION = "3.8.1"
-UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/maow7275-blip/glacier-ai-tool/main/update.json"
+UPDATE_MANIFEST_URLS = (
+    "https://www.updateglacieraiw.com/update.json",
+    "https://raw.githubusercontent.com/maow7275-blip/glacier-ai-tool/main/update.json",
+)
 
 
 class MentionPopup(QListWidget):
@@ -3586,21 +3589,30 @@ class MainWindow(QMainWindow):
             return
         self.nav_update_btn.setEnabled(False)
         self.footer_status.setText("正在检查更新...")
-        try:
-            response = requests.get(UPDATE_MANIFEST_URL, timeout=(5, 12))
-            response.raise_for_status()
-            manifest = response.json()
-            latest = str(manifest["version"])
-            release = manifest["windows"]
-            url = str(release["url"])
-            sha256 = str(release["sha256"])
-            if (not url.startswith("https://") or
-                    not re.fullmatch(r"[0-9a-fA-F]{64}", sha256) or
-                    not re.fullmatch(r"\d+(?:\.\d+){1,2}", latest)):
-                raise ValueError("更新清单格式无效")
-        except Exception as e:
+        manifest = None
+        manifest_errors = []
+        for manifest_url in UPDATE_MANIFEST_URLS:
+            try:
+                response = requests.get(manifest_url, timeout=(5, 12))
+                response.raise_for_status()
+                candidate = response.json()
+                latest = str(candidate["version"])
+                release = candidate["windows"]
+                url = str(release["url"])
+                sha256 = str(release["sha256"])
+                if (not url.startswith("https://") or
+                        not re.fullmatch(r"[0-9a-fA-F]{64}", sha256) or
+                        not re.fullmatch(r"\d+(?:\.\d+){1,2}", latest)):
+                    raise ValueError("更新清单格式无效")
+                manifest = candidate
+                break
+            except Exception as e:
+                manifest_errors.append(f"{manifest_url}: {e}")
+
+        if manifest is None:
             self.footer_status.setText("检查更新失败")
-            QMessageBox.warning(self, "检查更新", f"无法获取更新信息：{e}")
+            error = "\n".join(manifest_errors)
+            QMessageBox.warning(self, "检查更新", f"无法获取更新信息：\n{error}")
             self.nav_update_btn.setEnabled(True)
             return
 
