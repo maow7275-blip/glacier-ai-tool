@@ -1,6 +1,7 @@
 """Small Windows helper that replaces GlacierAI after the app exits."""
 
 import argparse
+import ctypes
 import os
 import subprocess
 import sys
@@ -8,15 +9,15 @@ import time
 
 
 def process_is_running(pid):
-    handle = __import__("ctypes").windll.kernel32.OpenProcess(0x1000, False, pid)
+    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
     if not handle:
         return False
     try:
-        exit_code = __import__("ctypes").c_ulong()
-        __import__("ctypes").windll.kernel32.GetExitCodeProcess(handle, __import__("ctypes").byref(exit_code))
+        exit_code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
         return exit_code.value == 259
     finally:
-        __import__("ctypes").windll.kernel32.CloseHandle(handle)
+        ctypes.windll.kernel32.CloseHandle(handle)
 
 
 def main():
