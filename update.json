@@ -1,8 +1,8 @@
 {
-  "version": "3.8.1",
+  "version": "3.8.2",
   "notes": "新增 gpt-image-2pro-4k；修复代理环境下图片结果下载问题；增加下载重试与失败历史记录。",
   "windows": {
-    "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V3.8.1.exe",
-    "sha256": "05c46f27daaf8e8d23f9efe2110cfa18dbf291980c8fb6739bbccf5277ca8c51"
+    "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V3.8.2.exe",
+    "sha256": "6aee48f714ee4f0f16c866c23edaad3ee8104ad9300ff8064be92dd414a2a977"
   }
 }

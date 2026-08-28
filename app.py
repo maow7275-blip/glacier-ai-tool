@@ -24,7 +24,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QPoint, QRect, QTimer, 
 from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinearGradient, QBrush, QPen, QPainterPath
 
 
-APP_VERSION = "3.8.1"
+APP_VERSION = "3.8.2"
 UPDATE_MANIFEST_URLS = (
     "https://www.updateglacieraiw.com/update.json",
     "https://raw.githubusercontent.com/maow7275-blip/glacier-ai-tool/main/update.json",
@@ -1496,7 +1496,8 @@ class GenerateThread(QThread):
 
     def _download_result(self, index, url, label="图片"):
         """Download an API result with proxy support, scoped auth, and retries."""
-        host = (urlsplit(url).hostname or "未知域名").lower()
+        parsed_url = urlsplit(url)
+        host = (parsed_url.hostname or "未知域名").lower()
         api_host = (urlsplit(API_URL).hostname or "").lower()
         headers = {}
         if host == api_host:
@@ -1504,27 +1505,38 @@ class GenerateThread(QThread):
 
         max_attempts = 3
         last_error = None
+        urls = [(url, headers, True)]
+        # Some domestic networks cannot resolve the image CDN hostname even though
+        # the CDN is reachable. Keep this narrowly scoped to qixinai.net and retain
+        # the original Host header for virtual-host routing.
+        if host in {"www.qixinai.net", "qixinai.net"}:
+            fallback_headers = {**headers, "Host": parsed_url.hostname}
+            fallback_url = parsed_url._replace(netloc="198.200.33.80").geturl()
+            urls.append((fallback_url, fallback_headers, False))
         for attempt in range(1, max_attempts + 1):
-            try:
-                response = requests.get(
-                    url,
-                    headers=headers,
-                    timeout=(15, 180),
-                )
-                append_debug_log(
-                    f"[IMAGE DOWNLOAD] index={index}, host={host}, attempt={attempt}, "
-                    f"status={response.status_code}, bytes={len(response.content)}, "
-                    f"content_type={response.headers.get('content-type', '?')}"
-                )
-                if response.status_code not in (408, 429, 500, 502, 503, 504):
-                    return response
-                last_error = f"HTTP {response.status_code}"
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                append_debug_log(
-                    f"[IMAGE DOWNLOAD ERROR] index={index}, host={host}, "
-                    f"attempt={attempt}/{max_attempts}, error={last_error}"
-                )
+            for candidate_url, candidate_headers, verify_tls in urls:
+                try:
+                    response = requests.get(
+                        candidate_url,
+                        headers=candidate_headers,
+                        timeout=(15, 180),
+                        verify=verify_tls,
+                    )
+                    append_debug_log(
+                        f"[IMAGE DOWNLOAD] index={index}, host={host}, attempt={attempt}, "
+                        f"route={'ip-fallback' if not verify_tls else 'direct'}, "
+                        f"status={response.status_code}, bytes={len(response.content)}, "
+                        f"content_type={response.headers.get('content-type', '?')}"
+                    )
+                    if response.status_code not in (408, 429, 500, 502, 503, 504):
+                        return response
+                    last_error = f"HTTP {response.status_code}"
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                    last_error = f"{type(exc).__name__}: {exc}"
+                    append_debug_log(
+                        f"[IMAGE DOWNLOAD ERROR] index={index}, host={host}, "
+                        f"attempt={attempt}/{max_attempts}, error={last_error}"
+                    )
 
             if attempt < max_attempts:
                 wait_seconds = attempt * 2
