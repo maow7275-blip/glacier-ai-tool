@@ -17,14 +17,14 @@ from PyQt5.QtWidgets import (
     QScrollArea, QMessageBox, QDialog, QLineEdit, QFrame,
     QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QSizePolicy, QStackedWidget,
     QGridLayout, QSpacerItem, QMenu, QAction, QStyledItemDelegate, QStyle, QListView,
-    QSlider, QListWidget, QCheckBox
+    QSlider, QListWidget, QCheckBox, QProgressBar
 )
 import re
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QPoint, QRect, QTimer, QMimeData, QEvent, QObject
 from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinearGradient, QBrush, QPen, QPainterPath
 
 
-APP_VERSION = "3.8.3"
+APP_VERSION = "3.8.8"
 UPDATE_MANIFEST_URLS = (
     "https://www.updateglacieraiw.com/update.json",
     "https://raw.githubusercontent.com/maow7275-blip/glacier-ai-tool/main/update.json",
@@ -217,6 +217,7 @@ class UpdateDownloadThread(QThread):
 
 
 API_URL = "https://www.hfsyapi.cn/v1/images/generations"
+API_BASE64_URL = "https://apigo.hfsyapi.cn/v1/images/generations"
 API_EDIT_URL = "https://www.hfsyapi.cn/v1/images/edits"
 VIDEO_API_URL = "https://www.hfsyapi.cn/v1/video/create"
 GEMINI_API_URL_TEMPLATE = "https://www.hfsyapi.cn/v1beta/models/{model}:generateContent"
@@ -237,6 +238,11 @@ def append_debug_log(message):
 
 RATIO_LIST = ["1:1", "5:4", "9:16", "16:9", "4:3", "3:2", "4:5", "3:4", "2:3", "21:9"]
 
+# Image generation models served by /v1/images/generations.  The API uses the
+# requested pixel dimensions as the quality selector, so these values are
+# intentionally kept separate from the Gemini image configuration below.
+SEEDREAM_RATIO_LIST = ["16:9", "4:3", "4:5", "9:16", "1:1", "2:1", "1.85:1", "2.4:1", "21:9"]
+
 GEMINI_RATIO_LIST = [
     "1:1", "2:1", "1:2", "3:2", "2:3", "4:3", "3:4",
     "5:4", "4:5", "16:9", "9:16", "21:9", "9:21",
@@ -253,6 +259,18 @@ SIZE_MAP = {
     "3:4":  {"1k": "768x1024",  "2k": "1536x2048", "4k": "2448x3264"},
     "2:3":  {"1k": "672x1008",  "2k": "1344x2016", "4k": "2336x3504"},
     "21:9": {"1k": "1344x576",  "2k": "2016x864",  "4k": "3696x1584"},
+}
+
+SEEDREAM_SIZE_MAP = {
+    "16:9": "1280x720",
+    "4:3": "1024x768",
+    "4:5": "1024x832",
+    "9:16": "720x1280",
+    "1:1": "1024x1024",
+    "2:1": "1024x512",
+    "1.85:1": "1024x554",
+    "2.4:1": "1024x427",
+    "21:9": "1344x576",
 }
 
 GEMINI_SIZE_MAP = {
@@ -273,8 +291,9 @@ GEMINI_SIZE_MAP = {
 
 MODEL_QUALITY = {
     "gpt-image-2": ["1k"],
-    "gpt-image-2pro": ["2k"],
-    "gpt-image-2pro-4k": ["2k", "4k"],
+    "gpt-image-2.5-flare": ["1k", "2k", "4k"],
+    "gpt-image-2.5-sunburst": ["1k", "2k", "4k"],
+    "seedream-5.0-pro": ["1k"],
     "nano-banana-2": ["1k", "2k", "4k"],
     "nano-banana-pro": ["1k", "2k", "4k"],
 }
@@ -284,10 +303,32 @@ GEMINI_MAX_REFERENCE_IMAGES = 7
 
 IMAGE_MODEL_MAX_REFS = {
     "gpt-image-2": 6,
-    "gpt-image-2pro": 4,
-    "gpt-image-2pro-4k": 4,
+    "gpt-image-2.5-flare": 16,
+    "gpt-image-2.5-sunburst": 16,
+    "seedream-5.0-pro": 10,
     "nano-banana-2": 7,
     "nano-banana-pro": 7,
+}
+
+IMAGE_MODEL_MAX_REF_BYTES = {
+    "gpt-image-2": 5 * 1024 * 1024,
+    "seedream-5.0-pro": 5 * 1024 * 1024,
+}
+IMAGE_MODEL_MAX_REF_TOTAL_BYTES = {
+    "gpt-image-2.5-flare": 25 * 1024 * 1024,
+    "gpt-image-2.5-sunburst": 25 * 1024 * 1024,
+}
+
+IMAGE_MODEL_RATIOS = {
+    "gpt-image-2": RATIO_LIST,
+    "gpt-image-2.5-flare": RATIO_LIST,
+    "gpt-image-2.5-sunburst": RATIO_LIST,
+    "seedream-5.0-pro": SEEDREAM_RATIO_LIST,
+}
+
+IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND = {
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
 }
 
 QUALITY_TO_API = {"1k": "low", "2k": "medium", "4k": "high"}
@@ -366,14 +407,14 @@ def get_or_make_thumb_for_video(video_path):
     except Exception:
         return None
 
-VIDEO_MODELS = ["sd-2 ▸", "sd-2.5 ▸", "grok-imagine-video-1.5", "minimax-h3"]
-# SD系列模型分组
+VIDEO_MODELS = ["sd-2.0 ▸", "sd-2.5 ▸", "minimax-h3"]
+# SD 系列模型分组。旧版 sd-2 与 Grok 模型不再放入下拉框。
 VIDEO_MODEL_GROUPS = {
-    "sd-2 ▸": ["sd-2", "sd-2-fast", "sd-2-vip", "sd-2-vip-720", "sd-2-mini-480", "sd-2-mini-720"],
+    "sd-2.0 ▸": ["sd-2.0", "sd-2.0-mini", "sd-2.0-480", "sd-2.0-fast", "sd-2.0-fast-480"],
     "sd-2.5 ▸": ["sd-2.5-480", "sd-2.5-720"],
 }
-# 默认隐藏的老模型，通过下拉框末尾"更多..."展开
-VIDEO_MODELS_HIDDEN = ["sora-2", "sd-2.0 ▸", "kling-o3"]
+# 仅保留暂未开放的模型；这些模型不会出现在默认下拉框中。
+VIDEO_MODELS_HIDDEN = ["sora-2", "kling-o3"]
 VIDEO_MODEL_DURATIONS = {
     "sora-2": ["4", "8", "12"],
     "sd-2.0": [str(i) for i in range(4, 16)],
@@ -393,7 +434,7 @@ VIDEO_MODEL_DURATIONS = {
     "sd-2-mini-480": [str(i) for i in range(5, 16)],
     "sd-2-mini-720": [str(i) for i in range(5, 16)],
 }
-VIDEO_PROMPT_LIMIT = {"sd-2.0": 5000, "sd-2.0-mini": 5000, "sd-2.0-480": 5000, "sd-2.0-fast": 5000, "sd-2.0-fast-480": 5000, "kling-o3": 5000,
+VIDEO_PROMPT_LIMIT = {"sd-2.0": 3500, "sd-2.0-mini": 3500, "sd-2.0-480": 3500, "sd-2.0-fast": 5000, "sd-2.0-fast-480": 5000, "kling-o3": 5000,
                       "minimax-h3": 5000, "sd-2": 5000, "sd-2-fast": 5000, "sd-2-vip": 15000, "sd-2-vip-720": 15000, "sd-2-mini-480": 15000, "sd-2-mini-720": 15000, "sd-2.5-480": 5000, "sd-2.5-720": 5000, "grok-imagine-video-1.5": 4000}
 VIDEO_MODEL_ORIENTATIONS = {
     "sora-2": {"横屏": "landscape", "竖屏": "portrait"},
@@ -415,11 +456,11 @@ VIDEO_MODEL_ORIENTATIONS = {
     "sd-2-mini-720": {"横屏": "landscape", "竖屏": "portrait"},
 }
 VIDEO_MODEL_RATIOS = {
-    "sd-2.0": ["16:9", "9:16", "1:1"],
-    "sd-2.0-mini": ["16:9", "9:16", "1:1"],
-    "sd-2.0-480": ["16:9", "9:16", "1:1"],
-    "sd-2.0-fast": ["16:9", "9:16", "1:1"],
-    "sd-2.0-fast-480": ["16:9", "9:16", "1:1"],
+    "sd-2.0": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
+    "sd-2.0-mini": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
+    "sd-2.0-480": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
+    "sd-2.0-fast": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
+    "sd-2.0-fast-480": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
     "sd-2.5-480": ["16:9", "4:3", "1:1", "3:4", "9:16"],
     "sd-2.5-720": ["16:9", "4:3", "1:1", "3:4", "9:16"],
     "grok-imagine-video-1.5": ["16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
@@ -439,6 +480,13 @@ VIDEO_MODEL_MAX_VIDEOS = {"sora-2": 0, "sd-2.0": 3, "sd-2.0-mini": 3, "sd-2.0-48
                           "sd-2.5-480": 10, "sd-2.5-720": 10, "kling-o3": 0, "minimax-h3": 0, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-vip": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
 VIDEO_MODEL_MAX_AUDIOS = {"sora-2": 0, "sd-2.0": 1, "sd-2.0-mini": 1, "sd-2.0-480": 1, "sd-2.0-fast": 1, "sd-2.0-fast-480": 1,
                           "sd-2.5-480": 10, "sd-2.5-720": 10, "kling-o3": 0, "minimax-h3": 1, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-vip": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
+VIDEO_MODEL_MAX_IMAGE_TOTAL_BYTES = {
+    "sd-2.0": 30 * 1024 * 1024,
+    "sd-2.0-mini": 30 * 1024 * 1024,
+    "sd-2.0-480": 30 * 1024 * 1024,
+    "sd-2.0-fast": 30 * 1024 * 1024,
+    "sd-2.0-fast-480": 30 * 1024 * 1024,
+}
 
 
 # 自定义 ComboBox，支持点击分组项时弹出子菜单
@@ -739,6 +787,44 @@ def build_login_style(theme_name):
 def build_settings_dialog_style(theme_name):
     t = get_theme(theme_name)
     return Template(SETTINGS_DIALOG_STYLE_TEMPLATE).safe_substitute(t)
+
+
+def build_message_box_style(theme_name):
+    """Return a readable QMessageBox palette for the active app theme."""
+    t = get_theme(theme_name)
+    if t.get("is_dark"):
+        button_bg = t["accent_soft"]
+        button_fg = t["accent_strong"]
+        button_hover = t["accent_hover"]
+    else:
+        button_bg = t["accent"]
+        button_fg = "#ffffff"
+        button_hover = t["accent_hover"]
+    return f"""
+        QMessageBox {{
+            background-color: {t['bg_card_solid']};
+            color: {t['text_primary']};
+            min-width: 380px;
+        }}
+        QMessageBox QLabel {{
+            color: {t['text_primary']};
+            background: transparent;
+            font-size: 14px;
+            padding: 8px 4px;
+        }}
+        QMessageBox QPushButton {{
+            color: {button_fg};
+            background-color: {button_bg};
+            border: 1px solid {t['accent_border']};
+            border-radius: 5px;
+            padding: 7px 18px;
+            min-width: 70px;
+            font-size: 13px;
+        }}
+        QMessageBox QPushButton:hover {{
+            background-color: {button_hover};
+        }}
+    """
 
 
 MAIN_STYLE_TEMPLATE = """
@@ -1483,7 +1569,7 @@ class GenerateThread(QThread):
     error = pyqtSignal(int, str)
     all_done = pyqtSignal()
 
-    def __init__(self, api_key, model, prompt, size, quality, output_format, count=1, image_url=None):
+    def __init__(self, api_key, model, prompt, size, quality, output_format, count=1, image_url=None, background=None, response_format="b64_json"):
         super().__init__()
         self.api_key = api_key
         self.model = model
@@ -1493,14 +1579,19 @@ class GenerateThread(QThread):
         self.output_format = output_format
         self.count = count
         self.image_url = image_url
+        self.background = background
+        self.response_format = response_format if response_format in ("b64_json", "b64_data") else "b64_json"
 
     def _download_result(self, index, url, label="图片"):
         """Download an API result with proxy support, scoped auth, and retries."""
         parsed_url = urlsplit(url)
         host = (parsed_url.hostname or "未知域名").lower()
-        api_host = (urlsplit(API_URL).hostname or "").lower()
+        api_hosts = {
+            (urlsplit(API_URL).hostname or "").lower(),
+            (urlsplit(API_BASE64_URL).hostname or "").lower(),
+        }
         headers = {}
-        if host == api_host:
+        if host in api_hosts:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         max_attempts = 3
@@ -1562,20 +1653,23 @@ class GenerateThread(QThread):
             "prompt": self.prompt,
             "n": 1,
             "size": self.size,
-            "quality": self.quality,
-            "response_format": "b64_json",
-            "output_format": self.output_format
+            "response_format": self.response_format,
         }
+        # hfsyapi's current GPT-Image/Seedream contract does not accept the
+        # legacy quality/output_format fields. Size carries the resolution.
+        if self.model in IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND and self.background:
+            payload["background"] = self.background
+        api_url = API_BASE64_URL if self.response_format == "b64_data" else API_URL
         if self.image_url:
             payload["reference_images"] = list(self.image_url)
-            print(f"[DEBUG] POST {API_URL} (json, {len(self.image_url)} reference_images)", flush=True)
+            print(f"[DEBUG] POST {api_url} (json, {len(self.image_url)} reference_images)", flush=True)
         else:
-            print(f"[DEBUG] POST {API_URL} (json, no image)", flush=True)
+            print(f"[DEBUG] POST {api_url} (json, no image)", flush=True)
 
         max_retries = 2
         resp = None
         for attempt in range(max_retries + 1):
-            resp = requests.post(API_URL, headers=headers, json=payload, timeout=(15, 600))
+            resp = requests.post(api_url, headers=headers, json=payload, timeout=(15, 600))
             try:
                 with open("debug_output.log", "a", encoding="utf-8") as _f:
                     _f.write(f"[RESP] model={self.model}, status={resp.status_code}, body={resp.text[:500]}\n")
@@ -1611,11 +1705,29 @@ class GenerateThread(QThread):
             return
 
         item = data["data"][0]
-        if item.get("b64_json"):
-            img_bytes = base64.b64decode(item["b64_json"])
-            self.one_finished.emit(index, img_bytes)
-        elif "url" in item or "file_id" in item:
+        b64_value = item.get("b64_data") or item.get("b64_json")
+        if b64_value:
+            # Some deployments use the b64_json field for a URL despite the
+            # field name. Treat HTTP values as URLs and decode actual Base64.
+            if isinstance(b64_value, str) and b64_value.startswith(("http://", "https://", "/")):
+                img_url = b64_value
+            else:
+                try:
+                    encoded = b64_value
+                    if isinstance(encoded, str) and encoded.startswith("data:"):
+                        encoded = encoded.split(",", 1)[1]
+                    if isinstance(encoded, str):
+                        encoded = re.sub(r"\s+", "", encoded)
+                    img_bytes = base64.b64decode(encoded, validate=True)
+                except (ValueError, TypeError):
+                    self.error.emit(index, f"第{index+1}张返回的 Base64 无效")
+                    return
+                self.one_finished.emit(index, img_bytes)
+                return
+        else:
             img_url = item.get("url", "")
+
+        if img_url:
             file_id = item.get("file_id", "")
             if img_url.startswith("http"):
                 dl_url = img_url
@@ -1630,10 +1742,10 @@ class GenerateThread(QThread):
             print(f"[DEBUG] Download status={img_resp.status_code}, content_length={len(img_resp.content)}, content_type={img_resp.headers.get('content-type','?')}", flush=True)
             if img_resp.status_code == 200 and len(img_resp.content) > 1000:
                 content_type = img_resp.headers.get("content-type", "")
-                if "image" in content_type or "octet-stream" in content_type or dl_url.endswith(".png") or dl_url.split("?")[0].endswith(".png") or dl_url.split("?")[0].endswith(".jpg"):
+                if "image" in content_type or "octet-stream" in content_type or dl_url.endswith((".png", ".jpg", ".jpeg", ".webp")):
                     self.one_finished.emit(index, img_resp.content)
                 else:
-                    header = img_resp.content[:8]
+                    header = img_resp.content[:12]
                     is_png = header[:4] == b'\x89PNG'
                     is_jpg = header[:2] == b'\xff\xd8'
                     is_webp = header[8:12] == b'WEBP' if len(header) >= 12 else False
@@ -1654,8 +1766,8 @@ class GenerateThread(QThread):
             else:
                 print(f"[DEBUG] Download failed body={img_resp.text[:200]}", flush=True)
                 self.error.emit(index, f"第{index+1}张下载失败 ({img_resp.status_code})")
-        else:
-            self.error.emit(index, f"第{index+1}张未知格式")
+            return
+        self.error.emit(index, f"第{index+1}张未知格式")
 
     def run(self):
         import threading, time
@@ -1830,10 +1942,11 @@ class VideoGenerateThread(QThread):
         payload = {
             "model": self.model,
             "prompt": self.prompt,
-            "orientation": self.size,
             "duration": int(self.duration),
             "watermark": False,
         }
+        if not self.model.startswith("sd-2.0"):
+            payload["orientation"] = self.size
         if self.model == "sora-2":
             payload["size"] = "1080p"
         elif self.sd_size:
@@ -3562,6 +3675,13 @@ class MainWindow(QMainWindow):
                 "QPushButton:hover { background: " + theme['accent_soft'] + "; }"
                 "QPushButton:disabled { color: " + theme['text_dim'] + "; border-color: " + theme['border_soft'] + "; }"
             )
+        progress_bar = getattr(self, "update_progress", None)
+        if progress_bar is not None:
+            progress_bar.setStyleSheet(
+                "QProgressBar { background-color: " + theme['border_soft'] + ";"
+                " border: 1px solid " + theme['border_soft'] + "; border-radius: 4px; padding: 0px; }"
+                "QProgressBar::chunk { background-color: " + theme['accent'] + "; border-radius: 3px; }"
+            )
 
     def _preview_ui_settings(self, font_scale, brightness, theme=None, concurrency=None):
         self._font_scale = font_scale
@@ -3594,13 +3714,15 @@ class MainWindow(QMainWindow):
 
     def _check_for_updates(self):
         if not sys.platform.startswith("win"):
-            QMessageBox.information(self, "检查更新", "Windows 自动更新仅在 Windows 发布版中可用。")
+            mb = QMessageBox.information(self, "检查更新", "Windows 自动更新仅在 Windows 发布版中可用。")
             return
         if not getattr(sys, "frozen", False):
             QMessageBox.information(self, "检查更新", "开发环境不执行自动更新。")
             return
         self.nav_update_btn.setEnabled(False)
         self.footer_status.setText("正在检查更新...")
+        self._set_update_progress("checking")
+        QApplication.processEvents()
         manifest = None
         manifest_errors = []
         for manifest_url in UPDATE_MANIFEST_URLS:
@@ -3623,14 +3745,26 @@ class MainWindow(QMainWindow):
 
         if manifest is None:
             self.footer_status.setText("检查更新失败")
+            self._set_update_progress("hide")
             error = "\n".join(manifest_errors)
-            QMessageBox.warning(self, "检查更新", f"无法获取更新信息：\n{error}")
+            mb = QMessageBox(self)
+            mb.setIcon(QMessageBox.Warning)
+            mb.setWindowTitle("检查更新")
+            mb.setText(f"无法获取更新信息：\n{error}")
+            mb.setStyleSheet(build_message_box_style(self._theme))
+            mb.exec_()
             self.nav_update_btn.setEnabled(True)
             return
 
         if _version_key(latest) <= _version_key(APP_VERSION):
             self.footer_status.setText("当前已是最新版本")
-            QMessageBox.information(self, "检查更新", f"当前已是最新版本（V{APP_VERSION}）。")
+            self._set_update_progress("hide")
+            mb = QMessageBox(self)
+            mb.setIcon(QMessageBox.Information)
+            mb.setWindowTitle("检查更新")
+            mb.setText(f"当前已是最新版本（V{APP_VERSION}）。")
+            mb.setStyleSheet(build_message_box_style(self._theme))
+            mb.exec_()
             self.nav_update_btn.setEnabled(True)
             return
 
@@ -3639,9 +3773,17 @@ class MainWindow(QMainWindow):
         if notes:
             message += f"更新内容：\n{notes}\n\n"
         message += "下载完成并校验后，程序将自动重启完成更新。是否现在下载？"
-        if QMessageBox.question(self, "发现新版本", message, QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
+        update_box = QMessageBox(self)
+        update_box.setWindowTitle("发现新版本")
+        update_box.setIcon(QMessageBox.Question)
+        update_box.setText(message)
+        update_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        update_box.setDefaultButton(QMessageBox.Yes)
+        update_box.setStyleSheet(build_message_box_style(self._theme))
+        if update_box.exec_() != QMessageBox.Yes:
             self.nav_update_btn.setEnabled(True)
             self.footer_status.setText("已取消更新")
+            self._set_update_progress("hide")
             return
 
         self._update_version = latest
@@ -3649,34 +3791,97 @@ class MainWindow(QMainWindow):
         self._update_thread.progress.connect(self._on_update_download_progress)
         self._update_thread.completed.connect(self._on_update_download_complete)
         self._update_thread.failed.connect(self._on_update_download_failed)
+        self._set_update_progress("download", 0)
         self._update_thread.start()
 
     def _on_update_download_progress(self, percent):
+        self._set_update_progress("download", percent)
         self.footer_status.setText(f"正在下载更新: {percent}%")
 
     def _on_update_download_failed(self, error):
         self.footer_status.setText("更新下载失败")
+        self._set_update_progress("hide")
         self.nav_update_btn.setEnabled(True)
-        QMessageBox.warning(self, "更新失败", f"未安装新版本：{error}")
+        mb = QMessageBox(self)
+        mb.setIcon(QMessageBox.Warning)
+        mb.setWindowTitle("更新失败")
+        mb.setText(f"未安装新版本：{error}")
+        mb.setStyleSheet(build_message_box_style(self._theme))
+        mb.exec_()
 
     def _on_update_download_complete(self, downloaded_exe):
-        bundle_dir = getattr(sys, "_MEIPASS", "")
-        updater = os.path.join(bundle_dir, "GlacierAI_updater.exe")
         target = os.path.abspath(sys.executable)
-        if not os.path.isfile(updater):
-            self._on_update_download_failed("更新组件缺失，请重新下载安装完整版本。")
-            return
         try:
-            subprocess.Popen(
-                [updater, "--pid", str(os.getpid()), "--source", downloaded_exe, "--target", target],
-                cwd=os.path.dirname(target),
-                close_fds=True,
-            )
-        except OSError as e:
+            self._launch_update_replacer(downloaded_exe, target)
+        except (OSError, IOError) as e:
             self._on_update_download_failed(str(e))
             return
         self.footer_status.setText("更新已下载，正在重启...")
         QApplication.quit()
+
+    def _launch_update_replacer(self, source, target):
+        """Launch a ctypes-free replacement process before this app exits.
+
+        Older bundled updaters imported ctypes and can fail before replacing the
+        executable. A short PowerShell script uses only built-in Windows
+        commands, so upgrades remain usable even when an old helper is present.
+        """
+        def _ps_quote(value):
+            return "'" + str(value).replace("'", "''") + "'"
+
+        script_path = os.path.join(
+            tempfile.gettempdir(), f"GlacierAI-update-{os.getpid()}.ps1"
+        )
+        script = "\n".join([
+            "$ErrorActionPreference = 'Stop'",
+            f"$processId = {os.getpid()}",
+            f"$source = {_ps_quote(os.path.abspath(source))}",
+            f"$target = {_ps_quote(os.path.abspath(target))}",
+            "$deadline = (Get-Date).AddSeconds(90)",
+            "while ((Get-Date) -lt $deadline) {",
+            "  if (-not (Get-Process -Id $processId -ErrorAction SilentlyContinue)) { break }",
+            "  Start-Sleep -Milliseconds 250",
+            "}",
+            "while ((Get-Date) -lt $deadline) {",
+            "  try {",
+            "    Move-Item -LiteralPath $source -Destination $target -Force",
+            "    Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target)",
+            "    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+            "    exit 0",
+            "  } catch { Start-Sleep -Milliseconds 500 }",
+            "}",
+            "exit 1",
+        ])
+        with open(script_path, "w", encoding="utf-8") as script_file:
+            script_file.write(script)
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            [
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", script_path,
+            ],
+            cwd=os.path.dirname(target),
+            close_fds=True,
+            creationflags=creationflags,
+        )
+
+    def _set_update_progress(self, mode, value=None):
+        """Update the compact footer progress indicator for the update workflow."""
+        progress_bar = getattr(self, "update_progress", None)
+        if progress_bar is None:
+            return
+        if mode == "checking":
+            progress_bar.setRange(0, 0)
+            progress_bar.setValue(0)
+            progress_bar.show()
+        elif mode == "download":
+            progress_bar.setRange(0, 100)
+            progress_bar.setValue(max(0, min(100, int(value or 0))))
+            progress_bar.show()
+        else:
+            progress_bar.hide()
+            progress_bar.setRange(0, 100)
+            progress_bar.setValue(0)
 
     def refresh_balance(self):
         if self._balance_thread is not None and self._balance_thread.isRunning():
@@ -3870,8 +4075,9 @@ class MainWindow(QMainWindow):
         setup_combo(self.model_combo)
         self.model_combo.addItems([
             "gpt-image-2",
-            "gpt-image-2pro",
-            "gpt-image-2pro-4k",
+            "gpt-image-2.5-flare",
+            "gpt-image-2.5-sunburst",
+            "seedream-5.0-pro",
             "nano-banana-2",
             "nano-banana-pro",
         ])
@@ -3902,13 +4108,32 @@ class MainWindow(QMainWindow):
         self.format_combo.addItems(["png", "jpeg"])
         grid.addWidget(self.format_combo, 3, 1)
 
+        self.response_format_label = QLabel("返回格式")
+        self.response_format_label.setObjectName("paramLabel")
+        grid.addWidget(self.response_format_label, 4, 0)
+        self.response_format_combo = QComboBox()
+        setup_combo(self.response_format_combo)
+        self.response_format_combo.addItem("图片 URL", "b64_json")
+        self.response_format_combo.addItem("Base64", "b64_data")
+        grid.addWidget(self.response_format_combo, 5, 0)
+
+        self.background_label = QLabel("背景")
+        self.background_label.setObjectName("paramLabel")
+        grid.addWidget(self.background_label, 4, 1)
+        self.background_combo = QComboBox()
+        setup_combo(self.background_combo)
+        self.background_combo.addItems(["默认", "透明"])
+        self.background_label.setVisible(False)
+        self.background_combo.setVisible(False)
+        grid.addWidget(self.background_combo, 5, 1)
+
         l5 = QLabel("生成数量")
         l5.setObjectName("paramLabel")
-        grid.addWidget(l5, 4, 0)
+        grid.addWidget(l5, 6, 0)
         self.img_count_combo = QComboBox()
         setup_combo(self.img_count_combo)
         self.img_count_combo.addItems([str(i) for i in range(1, 11)])
-        grid.addWidget(self.img_count_combo, 5, 0)
+        grid.addWidget(self.img_count_combo, 7, 0)
 
         pm_layout.addLayout(grid)
         pm_layout.addSpacing(8)
@@ -4222,7 +4447,7 @@ class MainWindow(QMainWindow):
         )
         setup_combo(self.video_model_combo)
         self.video_model_combo.addItems(VIDEO_MODELS)
-        self.video_model_combo.setCurrentText("sd-2 ▸")
+        self.video_model_combo._select_model("sd-2.0")
         self.video_model_combo.currentTextChanged.connect(self.on_video_model_changed)
         grid.addWidget(self.video_model_combo, 1, 0)
 
@@ -4356,13 +4581,30 @@ class MainWindow(QMainWindow):
     def _build_footer(self, parent_layout):
         footer = QFrame()
         footer.setObjectName("footerBar")
-        footer.setFixedHeight(36)
+        footer.setFixedHeight(42)
         fl = QHBoxLayout(footer)
         fl.setContentsMargins(20, 0, 20, 0)
+        fl.setSpacing(10)
 
         self.footer_status = QLabel("就绪")
         self.footer_status.setObjectName("footerText")
         fl.addWidget(self.footer_status)
+
+        self.update_progress = QProgressBar()
+        self.update_progress.setObjectName("updateProgress")
+        self.update_progress.setRange(0, 100)
+        self.update_progress.setValue(0)
+        self.update_progress.setTextVisible(False)
+        self.update_progress.setFixedSize(180, 8)
+        self.update_progress.setToolTip("更新进度")
+        self.update_progress.hide()
+        theme = get_theme(self._theme)
+        self.update_progress.setStyleSheet(
+            "QProgressBar { background-color: " + theme['border_soft'] + ";"
+            " border: 1px solid " + theme['border_soft'] + "; border-radius: 4px; padding: 0px; }"
+            "QProgressBar::chunk { background-color: " + theme['accent'] + "; border-radius: 3px; }"
+        )
+        fl.addWidget(self.update_progress)
 
         fl.addStretch()
 
@@ -4427,6 +4669,13 @@ class MainWindow(QMainWindow):
         model = self.model_combo.currentText() if hasattr(self, "model_combo") else ""
         return IMAGE_MODEL_MAX_REFS.get(model, 4)
 
+    def _current_img_ref_limits(self):
+        model = self.model_combo.currentText() if hasattr(self, "model_combo") else ""
+        return (
+            IMAGE_MODEL_MAX_REF_BYTES.get(model),
+            IMAGE_MODEL_MAX_REF_TOTAL_BYTES.get(model),
+        )
+
     def on_pick_img_ref(self):
         max_refs = self._current_max_img_refs()
         if len(self._img_ref_data_list) >= max_refs:
@@ -4444,11 +4693,31 @@ class MainWindow(QMainWindow):
             return
         slots_left = max_refs - len(self._img_ref_data_list)
         paths = paths[:slots_left]
+        max_each_bytes, max_total_bytes = self._current_img_ref_limits()
+        existing_total = sum(int(s.get("size", 0) or 0) for s in self._img_ref_data_list)
+        valid_paths = []
+        for path in paths:
+            try:
+                file_size = os.path.getsize(path)
+            except OSError as exc:
+                QMessageBox.warning(self, "提示", f"无法读取图片大小：{os.path.basename(path)} ({exc})")
+                continue
+            if max_each_bytes and file_size > max_each_bytes:
+                QMessageBox.warning(self, "提示", f"{os.path.basename(path)} 超过单张 5MB 限制")
+                continue
+            if max_total_bytes and existing_total + file_size > max_total_bytes:
+                QMessageBox.warning(self, "提示", "参考图总大小不能超过 25MB")
+                break
+            valid_paths.append(path)
+            existing_total += file_size
+        paths = valid_paths
+        if not paths:
+            return
         if not hasattr(self, "_upload_threads"):
             self._upload_threads = []
 
         for path in paths:
-            placeholder = {"url": None, "bytes": None, "name": os.path.basename(path), "uploading": True, "error": None}
+            placeholder = {"url": None, "bytes": None, "size": os.path.getsize(path), "name": os.path.basename(path), "uploading": True, "error": None}
             self._img_ref_data_list.append(placeholder)
             tag = f"img_ref_{id(placeholder)}"
 
@@ -4562,11 +4831,28 @@ class MainWindow(QMainWindow):
             return
         slots_left = max_imgs - len(self._vid_img_ref_data_list)
         paths = paths[:slots_left]
+        model = self.video_model_combo.currentText()
+        max_total_bytes = VIDEO_MODEL_MAX_IMAGE_TOTAL_BYTES.get(model)
+        existing_total = sum(int(slot.get("size", 0) or 0) for slot in self._vid_img_ref_data_list)
+        valid_paths = []
+        for path in paths:
+            try:
+                file_size = os.path.getsize(path)
+            except OSError as exc:
+                QMessageBox.warning(self, "提示", f"无法读取图片大小：{os.path.basename(path)} ({exc})")
+                continue
+            if max_total_bytes and existing_total + file_size > max_total_bytes:
+                QMessageBox.warning(self, "提示", f"{model} 的参考图总大小不能超过 30MB")
+                break
+            valid_paths.append(path)
+            existing_total += file_size
+        if not valid_paths:
+            return
         if not hasattr(self, "_upload_threads"):
             self._upload_threads = []
 
-        for path in paths:
-            placeholder = {"url": None, "bytes": None, "name": os.path.basename(path), "uploading": True, "error": None}
+        for path in valid_paths:
+            placeholder = {"url": None, "bytes": None, "size": os.path.getsize(path), "name": os.path.basename(path), "uploading": True, "error": None}
             self._vid_img_ref_data_list.append(placeholder)
             tag = f"vid_img_ref_{id(placeholder)}"
             thread = UploadRefImageThread(self.api_key, path, tag=tag)
@@ -4606,7 +4892,9 @@ class MainWindow(QMainWindow):
             if w:
                 w.deleteLater()
         thumb_size = 90
-        is_sd = self.video_model_combo.currentText().startswith("sd-2")
+        model = self.video_model_combo.currentText()
+        is_sd = model.startswith("sd-2")
+        is_sd_20 = model.startswith("sd-2.0")
         for i, slot in enumerate(self._vid_img_ref_data_list):
             img_bytes = slot.get("bytes")
             uploading = slot.get("uploading")
@@ -4638,11 +4926,12 @@ class MainWindow(QMainWindow):
             cl.addWidget(img_lbl, alignment=Qt.AlignCenter)
 
             if is_sd:
-                ins_btn = QPushButton(f"插入 @图片{i+1}")
+                ref_token = f"@{i+1}" if is_sd_20 else f"@图片{i+1}"
+                ins_btn = QPushButton(f"插入 {ref_token}")
                 ins_btn.setFixedSize(thumb_size, 18)
                 ins_btn.setCursor(Qt.PointingHandCursor)
                 ins_btn.setStyleSheet("background: " + get_theme(self._theme)['accent_soft'] + "; color: " + get_theme(self._theme)['accent'] + "; border: none; border-radius: 3px; font-size: 10px;")
-                ins_btn.clicked.connect(lambda checked, n=i+1: self._insert_ref_token(f"@图片{n}"))
+                ins_btn.clicked.connect(lambda checked, token=ref_token: self._insert_ref_token(token))
                 cl.addWidget(ins_btn, alignment=Qt.AlignCenter)
 
             del_btn = QPushButton("删除")
@@ -4670,8 +4959,9 @@ class MainWindow(QMainWindow):
         url = self.vid_video_ref_input.text().strip()
         if not url:
             return
-        if len(self._vid_video_ref_url_list) >= 3:
-            QMessageBox.warning(self, "提示", "最多支持 3 条参考视频")
+        max_videos = self._current_max_videos()
+        if len(self._vid_video_ref_url_list) >= max_videos:
+            QMessageBox.warning(self, "提示", f"当前模型最多支持 {max_videos} 条参考视频")
             return
         if not (url.startswith("http://") or url.startswith("https://")):
             QMessageBox.warning(self, "提示", "请填写完整的 http(s) URL")
@@ -4689,8 +4979,9 @@ class MainWindow(QMainWindow):
         url = self.vid_audio_ref_input.text().strip()
         if not url:
             return
-        if len(self._vid_audio_ref_url_list) >= 3:
-            QMessageBox.warning(self, "提示", "最多支持 3 条参考音频")
+        max_audios = self._current_max_audios()
+        if len(self._vid_audio_ref_url_list) >= max_audios:
+            QMessageBox.warning(self, "提示", f"当前模型最多支持 {max_audios} 条参考音频")
             return
         if not (url.startswith("http://") or url.startswith("https://")):
             QMessageBox.warning(self, "提示", "请填写完整的 http(s) URL")
@@ -4709,13 +5000,16 @@ class MainWindow(QMainWindow):
             w = self.vid_audio_ref_list_layout.takeAt(0).widget()
             if w:
                 w.deleteLater()
+        is_sd_20 = self.video_model_combo.currentText().startswith("sd-2.0")
+        reference_offset = len(self._vid_img_ref_data_list) + len(self._vid_video_ref_url_list)
         for i, url in enumerate(self._vid_audio_ref_url_list):
             row = QWidget()
             row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(6)
-            tag = QLabel(f"@声音{i+1}")
+            ref_token = f"@{reference_offset + i + 1}" if is_sd_20 else f"@声音{i+1}"
+            tag = QLabel(ref_token if is_sd_20 else f"@声音{i+1}")
             tag.setStyleSheet("color: " + get_theme(self._theme)['accent'] + "; font-size: 11px; min-width: 50px; background: transparent;")
             rl.addWidget(tag)
             url_lbl = QLabel(url)
@@ -4728,7 +5022,7 @@ class MainWindow(QMainWindow):
             ins_btn.setFixedSize(40, 20)
             ins_btn.setCursor(Qt.PointingHandCursor)
             ins_btn.setStyleSheet("background: " + get_theme(self._theme)['accent_soft'] + "; color: " + get_theme(self._theme)['accent'] + "; border: none; border-radius: 3px; font-size: 10px;")
-            ins_btn.clicked.connect(lambda checked, n=i+1: self._insert_ref_token(f"@声音{n}"))
+            ins_btn.clicked.connect(lambda checked, token=ref_token: self._insert_ref_token(token))
             rl.addWidget(ins_btn)
             del_btn = QPushButton("×")
             del_btn.setFixedSize(20, 20)
@@ -4738,20 +5032,24 @@ class MainWindow(QMainWindow):
             rl.addWidget(del_btn)
             self.vid_audio_ref_list_layout.addWidget(row)
         count = len(self._vid_audio_ref_url_list)
-        self.vid_audio_ref_count_label.setText(f"已添加 {count}/3 条" if count > 0 else "")
+        max_audios = self._current_max_audios()
+        self.vid_audio_ref_count_label.setText(f"已添加 {count}/{max_audios} 条" if count > 0 else "")
 
     def _refresh_vid_video_ref_list(self):
         while self.vid_video_ref_list_layout.count():
             w = self.vid_video_ref_list_layout.takeAt(0).widget()
             if w:
                 w.deleteLater()
+        is_sd_20 = self.video_model_combo.currentText().startswith("sd-2.0")
+        reference_offset = len(self._vid_img_ref_data_list)
         for i, url in enumerate(self._vid_video_ref_url_list):
             row = QWidget()
             row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(6)
-            tag = QLabel(f"@视频{i+1}")
+            ref_token = f"@{reference_offset + i + 1}" if is_sd_20 else f"@视频{i+1}"
+            tag = QLabel(ref_token if is_sd_20 else f"@视频{i+1}")
             tag.setStyleSheet("color: " + get_theme(self._theme)['accent'] + "; font-size: 11px; min-width: 50px; background: transparent;")
             rl.addWidget(tag)
             url_lbl = QLabel(url)
@@ -4764,7 +5062,7 @@ class MainWindow(QMainWindow):
             ins_btn.setFixedSize(40, 20)
             ins_btn.setCursor(Qt.PointingHandCursor)
             ins_btn.setStyleSheet("background: " + get_theme(self._theme)['accent_soft'] + "; color: " + get_theme(self._theme)['accent'] + "; border: none; border-radius: 3px; font-size: 10px;")
-            ins_btn.clicked.connect(lambda checked, n=i+1: self._insert_ref_token(f"@视频{n}"))
+            ins_btn.clicked.connect(lambda checked, token=ref_token: self._insert_ref_token(token))
             rl.addWidget(ins_btn)
             del_btn = QPushButton("×")
             del_btn.setFixedSize(20, 20)
@@ -4774,7 +5072,8 @@ class MainWindow(QMainWindow):
             rl.addWidget(del_btn)
             self.vid_video_ref_list_layout.addWidget(row)
         count = len(self._vid_video_ref_url_list)
-        self.vid_video_ref_count_label.setText(f"已添加 {count}/3 条" if count > 0 else "")
+        max_videos = self._current_max_videos()
+        self.vid_video_ref_count_label.setText(f"已添加 {count}/{max_videos} 条" if count > 0 else "")
 
     def _insert_ref_token(self, token):
         cursor = self.video_prompt_input.textCursor()
@@ -4785,6 +5084,13 @@ class MainWindow(QMainWindow):
         model = self.video_model_combo.currentText() if hasattr(self, "video_model_combo") else ""
         if model == "sora-2":
             return []
+        if model.startswith("sd-2.0"):
+            total = (
+                sum(1 for s in self._vid_img_ref_data_list if s.get("url")) +
+                len(self._vid_video_ref_url_list) +
+                len(self._vid_audio_ref_url_list)
+            )
+            return [str(i) for i in range(1, total + 1)]
         cands = []
         n_imgs = sum(1 for s in self._vid_img_ref_data_list if s.get("url"))
         for i in range(1, n_imgs + 1):
@@ -4901,7 +5207,7 @@ class MainWindow(QMainWindow):
         elif is_sd_new:
             self.vid_video_ref_card.setVisible(True)
             self.vid_video_ref_title.setText("参考视频（可选）")
-            self.vid_video_ref_hint.setText("提示：最多 3 条，分辨率 720p–2160p，总大小 ≤200MB，总时长 ≤15s，必须公网 URL")
+            self.vid_video_ref_hint.setText("提示：最多 3 条，分辨率 720p–2160p，单段 3–10s、≤200MB，总时长 ≤15s；prompt 用 @1 @2... 引用")
             self.vid_audio_ref_card.setVisible(True)
         elif is_sd:
             self.vid_video_ref_card.setVisible(True)
@@ -4944,7 +5250,7 @@ class MainWindow(QMainWindow):
         elif is_sd_25:
             self.vid_img_ref_hint.setText("提示：最多 30 张，单图 ≤30MB，所有素材总 ≤64MB；prompt 中可用 @1 @2... 引用")
         elif is_sd_new:
-            self.vid_img_ref_hint.setText("提示：最多 4 张，单图 ≤30MB；prompt 中可用 @1 @2... 引用")
+            self.vid_img_ref_hint.setText("提示：最多 4 张，总大小 ≤30MB，建议单张 ≤20MB；prompt 用 @1 @2... 引用")
         elif is_sd:
             self.vid_img_ref_hint.setText("提示：最多 9 张，单图 ≤30MB，所有素材总 ≤64MB；prompt 中可用 @1 @2... 引用")
         elif is_kling:
@@ -4953,7 +5259,9 @@ class MainWindow(QMainWindow):
         # 更新音频提示
         if is_sd_25:
             self.vid_audio_ref_hint.setText("提示：最多 10 条，单条 2-30s、≤15MB，总时长 ≤30s，必须公网 URL；prompt 中可用 @声音1 @声音2... 引用")
-        elif is_sd or is_sd_new:
+        elif is_sd_new:
+            self.vid_audio_ref_hint.setText("提示：最多 1 条，单条 ≤15MB、时长 3–10s，必须公网 URL；prompt 用连续编号引用")
+        elif is_sd:
             self.vid_audio_ref_hint.setText("提示：最多 3 条，单条 ≤15MB，总时长 ≤15s，必须公网 URL；prompt 中可用 @声音1 @声音2... 引用")
         elif is_minimax:
             self.vid_audio_ref_hint.setText("提示：最多 1 条，单条 ≤15MB，必须公网 URL；prompt 中可用 @声音1 引用")
@@ -4985,6 +5293,10 @@ class MainWindow(QMainWindow):
         model = self.video_model_combo.currentText()
         return VIDEO_MODEL_MAX_VIDEOS.get(model, 0)
 
+    def _current_max_audios(self):
+        model = self.video_model_combo.currentText()
+        return VIDEO_MODEL_MAX_AUDIOS.get(model, 0)
+
     def on_model_changed(self, model):
         self.quality_combo.clear()
         qualities = MODEL_QUALITY.get(model, ["1k"])
@@ -5000,14 +5312,31 @@ class MainWindow(QMainWindow):
             else:
                 self.size_combo.setCurrentText("1:1")
         else:
-            self.size_combo.addItems(RATIO_LIST)
-            if current_ratio in RATIO_LIST:
+            ratios = IMAGE_MODEL_RATIOS.get(model, RATIO_LIST)
+            self.size_combo.addItems(ratios)
+            if current_ratio in ratios:
                 self.size_combo.setCurrentText(current_ratio)
+            else:
+                self.size_combo.setCurrentText(ratios[0])
         self.size_combo.blockSignals(False)
 
+        has_transparent_bg = model in IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND
+        if hasattr(self, "background_label"):
+            self.background_label.setVisible(has_transparent_bg)
+            self.background_combo.setVisible(has_transparent_bg)
+            self.response_format_label.setVisible(model not in GEMINI_MODELS)
+            self.response_format_combo.setVisible(model not in GEMINI_MODELS)
+
         max_refs = IMAGE_MODEL_MAX_REFS.get(model, 4)
+        max_each_bytes = IMAGE_MODEL_MAX_REF_BYTES.get(model)
+        max_total_bytes = IMAGE_MODEL_MAX_REF_TOTAL_BYTES.get(model)
         if hasattr(self, "img_ref_hint"):
-            self.img_ref_hint.setText(f"提示：参考图最多 {max_refs} 张")
+            hint = f"提示：参考图最多 {max_refs} 张"
+            if max_each_bytes:
+                hint += "，单张不超过 5MB"
+            elif max_total_bytes:
+                hint += "，总大小不超过 25MB"
+            self.img_ref_hint.setText(hint)
         if len(self._img_ref_data_list) > max_refs:
             self._img_ref_data_list[:] = self._img_ref_data_list[:max_refs]
             if hasattr(self, "_refresh_img_ref_preview"):
@@ -5026,21 +5355,36 @@ class MainWindow(QMainWindow):
         count = int(self.img_count_combo.currentText())
         model = self.model_combo.currentText()
         img_ref_urls = [s["url"] for s in self._img_ref_data_list if s.get("url")]
+        typed_refs = self.img_ref_url.text().strip()
+        if typed_refs and not typed_refs.startswith("已选择"):
+            img_ref_urls.extend(
+                url for url in re.split(r"[\s,，;；]+", typed_refs)
+                if url.startswith(("http://", "https://"))
+            )
 
         max_refs = IMAGE_MODEL_MAX_REFS.get(model, 4)
         if len(img_ref_urls) > max_refs:
             QMessageBox.warning(self, "提示", f"{model} 最多支持 {max_refs} 张参考图，请删除多余的参考图后重试")
             return
+        max_total_bytes = IMAGE_MODEL_MAX_REF_TOTAL_BYTES.get(model)
+        if max_total_bytes:
+            total_bytes = sum(int(s.get("size", 0) or 0) for s in self._img_ref_data_list)
+            if total_bytes > max_total_bytes:
+                QMessageBox.warning(self, "提示", "参考图总大小不能超过 25MB")
+                return
 
         ratio = self.size_combo.currentText()
         quality = self.quality_combo.currentText()
         if model in GEMINI_MODELS:
             actual_size = GEMINI_SIZE_MAP.get(ratio, {}).get(quality, "1024x1024")
+        elif model == "seedream-5.0-pro":
+            actual_size = SEEDREAM_SIZE_MAP.get(ratio, "1024x1024")
         else:
             actual_size = SIZE_MAP.get(ratio, {}).get(quality, "1024x1024")
 
         fmt = self.format_combo.currentText()
         ext = fmt if fmt == "png" else "jpg"
+        response_format = self.response_format_combo.currentData() or "b64_json"
 
         params = {
             "model": model,
@@ -5052,10 +5396,15 @@ class MainWindow(QMainWindow):
             "count": count,
             "image_url": img_ref_urls if img_ref_urls else None,
             "ratio": ratio,
+            "response_format": response_format,
+            "background": "transparent" if (
+                model in IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND and
+                self.background_combo.currentText() == "透明"
+            ) else None,
         }
         summary = {
             "label": f"{model} · {count}张 · {ratio} · {quality}",
-            "meta": f"{actual_size} · {fmt}",
+            "meta": f"{actual_size} · {fmt} · {response_format}",
             "prompt": prompt,
             "count": count,
         }
@@ -5088,6 +5437,24 @@ class MainWindow(QMainWindow):
         vid_img_urls = [s["url"] for s in self._vid_img_ref_data_list if s.get("url")]
         vid_video_urls = list(self._vid_video_ref_url_list)
         vid_audio_urls = list(self._vid_audio_ref_url_list)
+        max_images = self._current_max_images()
+        max_videos = self._current_max_videos()
+        max_audios = self._current_max_audios()
+        if len(vid_img_urls) > max_images:
+            QMessageBox.warning(self, "提示", f"{model} 最多支持 {max_images} 张参考图片")
+            return
+        if len(vid_video_urls) > max_videos:
+            QMessageBox.warning(self, "提示", f"{model} 最多支持 {max_videos} 条参考视频")
+            return
+        if len(vid_audio_urls) > max_audios:
+            QMessageBox.warning(self, "提示", f"{model} 最多支持 {max_audios} 条参考音频")
+            return
+        max_image_total_bytes = VIDEO_MODEL_MAX_IMAGE_TOTAL_BYTES.get(model)
+        if max_image_total_bytes:
+            image_total_bytes = sum(int(s.get("size", 0) or 0) for s in self._vid_img_ref_data_list)
+            if image_total_bytes > max_image_total_bytes:
+                QMessageBox.warning(self, "提示", f"{model} 的参考图总大小不能超过 30MB")
+                return
         is_kling = model == "kling-o3"
         is_grok = model == "grok-imagine-video-1.5"
         if is_grok and 0 < len(vid_img_urls) < 2:
@@ -5146,6 +5513,8 @@ class MainWindow(QMainWindow):
             thread = GenerateThread(
                 self.api_key, p["model"], p["prompt"], p["size"], p["quality"],
                 p["output_format"], p["count"], image_url=p.get("image_url"),
+                background=p.get("background"),
+                response_format=p.get("response_format", "b64_json"),
             )
         else:
             p = task.params

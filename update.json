@@ -1,8 +1,8 @@
 {
-  "version": "3.8.2",
-  "notes": "新增 gpt-image-2pro-4k；修复代理环境下图片结果下载问题；增加下载重试与失败历史记录。",
+  "version": "3.8.8",
+  "notes": "sd-2.0 系列支持 @1/@2 连续编号引用图片、视频和音频素材。",
   "windows": {
-    "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V3.8.2.exe",
-    "sha256": "6aee48f714ee4f0f16c866c23edaad3ee8104ad9300ff8064be92dd414a2a977"
+    "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V3.8.8.exe",
+    "sha256": "f26c11cdea372717e67f92ceb65981cdc918b12339f8423a57120c536e26d5dc"
   }
 }

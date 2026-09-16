@@ -1,7 +1,6 @@
 """Small Windows helper that replaces GlacierAI after the app exits."""
 
 import argparse
-import ctypes
 import os
 import subprocess
 import sys
@@ -9,15 +8,27 @@ import time
 
 
 def process_is_running(pid):
-    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-    if not handle:
+    """Check the parent process without importing ctypes.
+
+    The updater is shipped as a tiny standalone executable.  Calling the
+    native ``tasklist`` command keeps it independent from the optional
+    ``_ctypes`` extension, which was missing from some older customer builds.
+    """
+    if pid <= 0:
         return False
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        exit_code = ctypes.c_ulong()
-        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
-        return exit_code.value == 259
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            creationflags=creationflags,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return f'"{pid}"' in result.stdout
 
 
 def main():
