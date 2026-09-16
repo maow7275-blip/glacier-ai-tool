@@ -337,43 +337,10 @@ VIDEO_SIZES = {"横屏": "landscape", "竖屏": "portrait"}
 VIDEO_DURATIONS = ["4", "8", "12"]
 
 
-def extract_video_first_frame_bytes(video_bytes_or_path):
-    """从视频字节或文件路径抽首帧，返回 PNG bytes，失败返回 None。"""
-    try:
-        import cv2
-        import numpy as np
-        import tempfile
-    except Exception:
-        return None
-    tmp_path = None
-    try:
-        if isinstance(video_bytes_or_path, (bytes, bytearray)):
-            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-            tmp.write(video_bytes_or_path)
-            tmp.close()
-            tmp_path = tmp.name
-            path = tmp_path
-        else:
-            path = video_bytes_or_path
-        cap = cv2.VideoCapture(path)
-        try:
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                return None
-            ok2, buf = cv2.imencode(".png", frame)
-            if not ok2:
-                return None
-            return bytes(buf)
-        finally:
-            cap.release()
-    except Exception:
-        return None
-    finally:
-        if tmp_path:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+class UpdateDownloadThread(QThread):
+    progress = pyqtSignal(int)
+    completed = pyqtSignal(str)
+    failed = pyqtSignal(str)
 
 
 def get_or_make_thumb_for_video(video_path):
@@ -825,6 +792,1186 @@ def build_message_box_style(theme_name):
             background-color: {button_hover};
         }}
     """
+
+
+MAIN_STYLE_TEMPLATE = """
+QWidget {
+    font-family: "Segoe UI", "Microsoft YaHei";
+    font-size: 14px;
+    color: $text_primary;
+}
+QFrame#titleBar {
+    background-color: $bg_titlebar;
+    border-bottom: 1px solid $border_soft;
+}
+QLabel#titleBrand {
+    color: $accent;
+    font-size: 18px;
+    font-weight: 700;
+    font-style: italic;
+}
+QLabel#titleSub {
+    color: $text_muted;
+    font-size: 13px;
+}
+QPushButton#winBtn {
+    background: transparent;
+    border: none;
+    color: $accent;
+    font-size: 16px;
+    padding: 6px 12px;
+}
+QPushButton#winBtn:hover {
+    background-color: $accent_softer;
+}
+QPushButton#winBtnClose {
+    background: transparent;
+    border: none;
+    color: $accent;
+    font-size: 16px;
+    padding: 6px 12px;
+}
+QPushButton#winBtnClose:hover {
+    background-color: rgba(255, 107, 107, 0.2);
+    color: #ff6b6b;
+}
+QFrame#sideNav {
+    background-color: $bg_sidebar;
+    border-right: 1px solid $border_top_alpha;
+}
+QLabel#navTitle {
+    color: $accent;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 3px;
+}
+QLabel#navVersion {
+    color: $text_muted;
+    font-size: 11px;
+    font-family: "Consolas", "Courier New";
+}
+QPushButton#navBtn {
+    background: transparent;
+    border: none;
+    border-right: 2px solid transparent;
+    color: $text_secondary;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+    padding: 12px 18px;
+}
+QPushButton#navBtn:hover {
+    background-color: $accent_softer;
+    color: $text_primary;
+}
+QPushButton#navBtnActive {
+    background-color: $accent_soft;
+    border: none;
+    border-right: 2px solid $accent;
+    color: $accent_strong;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+    padding: 12px 18px;
+}
+QLabel#navKeyLabel {
+    color: $text_muted;
+    font-size: 12px;
+    font-family: "Consolas", "Courier New";
+}
+QFrame#glassPanel {
+    background-color: $bg_card;
+    border: 1px solid $border_soft;
+    border-radius: 12px;
+}
+QLabel#sectionLabel {
+    color: $text_primary;
+    font-size: 15px;
+    font-weight: 600;
+}
+QLabel#sectionBadge {
+    color: $text_muted;
+    font-size: 11px;
+    font-family: "Consolas", "Courier New";
+    background-color: $btn_disabled_bg;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+QLabel#paramLabel {
+    color: $text_secondary;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+}
+QTextEdit#promptInput {
+    background-color: $bg_input_strong;
+    border: 1px solid $border_soft;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 14px;
+    color: $text_input;
+    selection-background-color: $accent_border;
+}
+QTextEdit#promptInput:focus {
+    border: 1px solid $border_focus;
+}
+QComboBox {
+    background-color: $bg_input;
+    border: 1px solid $border_soft;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: "Inter", "Source Han Sans SC", "思源黑体", "Microsoft YaHei";
+    font-size: 15px;
+    color: $text_input;
+    min-width: 100px;
+    min-height: 22px;
+}
+QComboBox:hover {
+    border-color: $accent_border;
+}
+QComboBox:focus {
+    border-color: $border_focus;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+QComboBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid $text_muted;
+    margin-right: 8px;
+}
+QComboBox QAbstractItemView {
+    background-color: $bg_combo_pop;
+    border: 1px solid $border_soft;
+    border-radius: 10px;
+    selection-background-color: $bg_combo_pop_item_sel;
+    selection-color: $text_primary;
+    color: $text_input;
+    padding: 6px;
+    outline: none;
+    font-family: "Inter", "Source Han Sans SC", "思源黑体", "Microsoft YaHei";
+    font-size: 14px;
+}
+QComboBox QListView {
+    background-color: $bg_combo_pop;
+    border: none;
+    outline: none;
+}
+QComboBox QFrame {
+    border: none;
+    background-color: $bg_combo_pop;
+}
+QComboBox QAbstractItemView::item {
+    background-color: $bg_combo_pop;
+    color: $text_input;
+    padding: 8px 14px;
+    min-height: 28px;
+    border: none;
+}
+QComboBox QAbstractItemView::item:selected {
+    background-color: $bg_combo_pop_item_sel;
+    color: $text_primary;
+}
+QComboBox QAbstractItemView::item:hover {
+    background-color: $bg_combo_pop_item_sel;
+    color: $text_primary;
+}
+QPushButton#generateBtn {
+    background-color: $accent_soft;
+    border: 1px solid $accent_border;
+    border-radius: 12px;
+    color: $accent;
+    font-size: 18px;
+    font-weight: 800;
+    padding: 16px;
+}
+QPushButton#generateBtn:hover {
+    background-color: $accent_hover;
+}
+QPushButton#generateBtn:pressed {
+    background-color: $accent_press;
+}
+QPushButton#generateBtn:disabled {
+    background-color: $btn_disabled_bg;
+    border-color: $btn_disabled_border;
+    color: $text_dim;
+}
+QPushButton#saveBtn {
+    background-color: $border_soft;
+    border: 1px solid $scrollbar_thumb;
+    border-radius: 8px;
+    color: $accent;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 10px 24px;
+}
+QPushButton#saveBtn:hover {
+    background-color: $scrollbar_thumb;
+}
+QPushButton#saveBtn:disabled {
+    background-color: $btn_disabled_bg;
+    border-color: $btn_disabled_border;
+    color: $save_disabled_text;
+}
+QFrame#previewArea {
+    background-color: $bg_card;
+    border: 2px dashed $scrollbar_thumb;
+    border-radius: 16px;
+}
+QLabel#previewPlaceholder {
+    color: $text_dim;
+    font-size: 15px;
+}
+QLabel#previewTitle {
+    color: $text_primary;
+    font-size: 18px;
+    font-weight: 700;
+}
+QLabel#previewDesc {
+    color: $text_secondary;
+    font-size: 14px;
+}
+QFrame#footerBar {
+    background-color: $footer_bg;
+    border-top: 1px solid $border_soft;
+}
+QLabel#footerText {
+    color: $text_muted;
+    font-size: 11px;
+    font-family: "Consolas", "Courier New";
+}
+QLabel#footerBrand {
+    color: $border_focus;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: "Consolas", "Courier New";
+}
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+QScrollBar:vertical {
+    background: $scrollbar_track;
+    width: 6px;
+    border-radius: 3px;
+}
+QScrollBar::handle:vertical {
+    background: $scrollbar_thumb;
+    border-radius: 3px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover {
+    background: $accent_press;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar:horizontal {
+    height: 0px;
+}
+QLineEdit#refUrlInput {
+    background-color: $bg_input;
+    border: 1px solid $border_soft;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 14px;
+    color: $text_input;
+}
+QLineEdit#refUrlInput:focus {
+    border: 1px solid $border_focus;
+}
+QPushButton#refBtn {
+    background-color: $border_soft;
+    border: 1px solid $accent_soft;
+    border-radius: 8px;
+    color: $accent;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 9px 18px;
+}
+QPushButton#refBtn:hover {
+    background-color: $scrollbar_thumb;
+}
+QLabel#thumbLabel {
+    border: 2px solid transparent;
+    border-radius: 8px;
+    padding: 4px;
+    background-color: $bg_input_strong;
+}
+QLabel#thumbLabel:hover {
+    border-color: $accent_border;
+    background-color: $accent_softer;
+}
+QFrame#videoThumb {
+    border: 2px solid transparent;
+    border-radius: 8px;
+    padding: 8px;
+    background-color: $bg_input_strong;
+}
+QFrame#videoThumb:hover {
+    border-color: $accent_border;
+    background-color: $accent_softer;
+}
+"""
+
+LOGIN_STYLE_TEMPLATE = """
+QDialog {
+    background-color: $bg_main;
+}
+QFrame#loginCard {
+    background-color: $bg_card;
+    border: 1px solid $border_soft;
+    border-radius: 16px;
+}
+QLabel#loginTitle {
+    color: $accent;
+    font-size: 24px;
+    font-weight: 700;
+    font-style: italic;
+}
+QLabel#loginSubtitle {
+    color: $text_muted;
+    font-size: 14px;
+}
+QLabel#loginVersion {
+    color: $footer_brand;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: "Consolas", "Courier New";
+    letter-spacing: 1px;
+}
+QLabel#loginHint {
+    color: $text_secondary;
+    font-size: 14px;
+}
+QLineEdit#keyInput {
+    background-color: $bg_input;
+    border: 1px solid $border_soft;
+    border-radius: 8px;
+    padding: 11px 14px;
+    font-size: 15px;
+    color: $text_input;
+}
+QLineEdit#keyInput:focus {
+    border: 1px solid $border_focus;
+}
+QPushButton#loginBtn {
+    background-color: $accent_soft;
+    border: 1px solid $accent_border;
+    color: $accent;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 700;
+    padding: 13px;
+}
+QPushButton#loginBtn:hover {
+    background-color: $accent_hover;
+}
+QPushButton#loginBtn:pressed {
+    background-color: $accent_press;
+}
+QPushButton#toggleBtn {
+    border: none;
+    color: $accent;
+    font-size: 14px;
+    background: transparent;
+}
+QPushButton#tutorialBtn {
+    border: none;
+    color: $text_muted;
+    font-size: 14px;
+    background: transparent;
+}
+QPushButton#tutorialBtn:hover {
+    color: $accent;
+}
+QCheckBox#rememberChk {
+    color: $text_secondary;
+    font-size: 13px;
+    spacing: 8px;
+}
+QCheckBox#rememberChk::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid $accent_border;
+    border-radius: 3px;
+    background-color: $bg_input;
+}
+QCheckBox#rememberChk::indicator:checked {
+    background-color: $accent;
+    border: 1px solid $accent;
+}
+"""
+
+
+def get_logo_path():
+    if getattr(sys, 'frozen', False):
+        return os.path.join(sys._MEIPASS, 'logo.png')
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
+
+
+def setup_combo(combo):
+    combo.setMaxVisibleItems(20)
+    combo.view().setMouseTracking(True)
+    combo.wheelEvent = lambda e: e.ignore()
+
+
+
+class TutorialDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("如何获取 API Key")
+        self.setFixedSize(520, 520)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setStyleSheet("""
+            QDialog { background-color: #0a0e1a; }
+            QLabel { color: #e0e8f0; }
+            QPushButton#closeBtn {
+                background-color: rgba(125, 211, 252, 0.15);
+                border: 1px solid rgba(125, 211, 252, 0.3);
+                color: #7dd3fc; border-radius: 8px;
+                font-size: 13px; font-weight: 600; padding: 10px 28px;
+            }
+            QPushButton#closeBtn:hover { background-color: rgba(125, 211, 252, 0.25); }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(16)
+
+        title = QLabel("如何获取 API Key")
+        title.setStyleSheet("color: #7dd3fc; font-size: 18px; font-weight: 700;")
+        layout.addWidget(title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        content = QLabel()
+        content.setWordWrap(True)
+        content.setTextFormat(Qt.RichText)
+        content.setAlignment(Qt.AlignTop)
+        content.setStyleSheet("background: transparent; font-size: 13px; line-height: 1.6; padding: 4px;")
+        content.setOpenExternalLinks(True)
+        content.setText(
+            '<p style="color:#94a3b8; margin-bottom:12px;">按照以下步骤获取您的 API Key：</p>'
+            '<p style="color:#7dd3fc; font-weight:600; margin-bottom:4px;">第一步：注册账号</p>'
+            '<p style="color:#a0b4c4; margin-bottom:12px;">'
+            '访问 API 平台官网：<a href="https://www.hfsyapi.cn/" style="color:#7dd3fc;">https://www.hfsyapi.cn/</a><br>'
+            '点击"注册"按钮创建账号，使用邮箱或手机号完成注册流程。</p>'
+            '<p style="color:#7dd3fc; font-weight:600; margin-bottom:4px;">第二步：登录后台</p>'
+            '<p style="color:#a0b4c4; margin-bottom:12px;">'
+            '注册完成后登录 <a href="https://www.hfsyapi.cn/" style="color:#7dd3fc;">https://www.hfsyapi.cn/</a> 管理后台。<br>'
+            '在左侧菜单中找到"API 管理"或"令牌管理"入口。</p>'
+            '<p style="color:#7dd3fc; font-weight:600; margin-bottom:4px;">第三步：创建 API Key</p>'
+            '<p style="color:#a0b4c4; margin-bottom:12px;">'
+            '点击"创建新令牌"或"生成 API Key"按钮。<br>'
+            '为令牌设置一个名称（如 "Glacier AI"）。<br>'
+            '点击确认后，系统会生成一个以 <b style="color:#7dd3fc;">sk-</b> 开头的密钥。</p>'
+            '<p style="color:#7dd3fc; font-weight:600; margin-bottom:4px;">第四步：复制并使用</p>'
+            '<p style="color:#a0b4c4; margin-bottom:12px;">'
+            '点击复制按钮，将 API Key 复制到剪贴板。<br>'
+            '回到本软件，粘贴到输入框中，点击"开始使用"即可。</p>'
+            '<p style="color:#ff6b6b; font-size:12px; margin-top:8px;">'
+            '⚠ 请妥善保管您的 API Key，不要分享给他人。<br>'
+            '如果密钥泄露，请立即到后台重新生成。</p>'
+        )
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        close_btn = QPushButton("我知道了")
+        close_btn.setObjectName("closeBtn")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.close)
+        btn_row.addWidget(close_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+
+class KeyDialog(QDialog):
+    def __init__(self, parent=None, prefill_key="", theme=None):
+        super().__init__(parent)
+        self.setWindowTitle("Glacier AI")
+        self.setFixedSize(440, 460)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setStyleSheet(build_login_style(theme or DEFAULT_THEME))
+
+        logo_path = get_logo_path()
+        if os.path.exists(logo_path):
+            self.setWindowIcon(QIcon(logo_path))
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(30, 30, 30, 30)
+
+        card = QFrame()
+        card.setObjectName("loginCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(16)
+        card_layout.setContentsMargins(28, 32, 28, 28)
+
+        title = QLabel("Glacier AI")
+        title.setObjectName("loginTitle")
+        card_layout.addWidget(title)
+
+        subtitle = QLabel("New API - Image & Video Generator")
+        subtitle.setObjectName("loginSubtitle")
+        card_layout.addWidget(subtitle)
+
+        version = QLabel("VERSION 3.8.1")
+        version.setObjectName("loginVersion")
+        card_layout.addWidget(version)
+
+        card_layout.addSpacing(8)
+
+        hint = QLabel("请输入您的 API Key")
+        hint.setObjectName("loginHint")
+        card_layout.addWidget(hint)
+
+        self.key_input = QLineEdit()
+        self.key_input.setObjectName("keyInput")
+        self.key_input.setPlaceholderText("sk-xxxxxxxxxxxxxxxx")
+        self.key_input.setMinimumHeight(42)
+        self.key_input.setEchoMode(QLineEdit.Password)
+        card_layout.addWidget(self.key_input)
+
+        self.toggle_btn = QPushButton("显示")
+        self.toggle_btn.setObjectName("toggleBtn")
+        self.toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.toggle_btn.clicked.connect(self.toggle_visibility)
+        card_layout.addWidget(self.toggle_btn, alignment=Qt.AlignRight)
+
+        self.remember_chk = QCheckBox("记住 API Key（保存到本地，下次免输入）")
+        self.remember_chk.setObjectName("rememberChk")
+        self.remember_chk.setCursor(Qt.PointingHandCursor)
+        self.remember_chk.setChecked(True)
+        card_layout.addWidget(self.remember_chk)
+
+        card_layout.addSpacing(4)
+
+        self.login_btn = QPushButton("开始使用")
+        self.login_btn.setObjectName("loginBtn")
+        self.login_btn.setMinimumHeight(44)
+        self.login_btn.setCursor(Qt.PointingHandCursor)
+        self.login_btn.clicked.connect(self.on_login)
+        card_layout.addWidget(self.login_btn)
+
+        self.tutorial_btn = QPushButton("如何获取 API Key？")
+        self.tutorial_btn.setObjectName("tutorialBtn")
+        self.tutorial_btn.setCursor(Qt.PointingHandCursor)
+        self.tutorial_btn.clicked.connect(self.show_tutorial)
+        card_layout.addWidget(self.tutorial_btn, alignment=Qt.AlignCenter)
+
+        outer.addWidget(card)
+
+        if prefill_key:
+            self.key_input.setText(prefill_key)
+            self.remember_chk.setChecked(True)
+
+    def toggle_visibility(self):
+        if self.key_input.echoMode() == QLineEdit.Password:
+            self.key_input.setEchoMode(QLineEdit.Normal)
+            self.toggle_btn.setText("隐藏")
+        else:
+            self.key_input.setEchoMode(QLineEdit.Password)
+            self.toggle_btn.setText("显示")
+
+    def on_login(self):
+        key = self.key_input.text().strip()
+        if not key:
+            mb = QMessageBox(self)
+            mb.setIcon(QMessageBox.Warning)
+            mb.setWindowTitle("提示")
+            mb.setText("请输入正确的 API Key")
+            mb.exec_()
+            return
+        if not key.startswith("sk-"):
+            mb = QMessageBox(self)
+            mb.setIcon(QMessageBox.Warning)
+            mb.setWindowTitle("提示")
+            mb.setText("请输入正确的 API Key")
+            mb.setInformativeText("API Key 格式不正确，应以 sk- 开头")
+            mb.exec_()
+            return
+        self.accept()
+
+    def get_key(self):
+        return self.key_input.text().strip()
+
+    def should_remember(self):
+        return self.remember_chk.isChecked()
+
+    def show_tutorial(self):
+        dlg = TutorialDialog(self)
+        dlg.exec_()
+
+
+class UploadRefImageThread(QThread):
+    finished_ok = pyqtSignal(str, str, bytes)
+    failed = pyqtSignal(str, str)
+
+    def __init__(self, api_key, file_path, tag=""):
+        super().__init__()
+        self.api_key = api_key
+        self.file_path = file_path
+        self.tag = tag
+
+    def run(self):
+        try:
+            response = requests.get(self.url, stream=True, timeout=(10, 120))
+            response.raise_for_status()
+            total = int(response.headers.get("content-length", 0))
+            temp_dir = tempfile.mkdtemp(prefix="GlacierAI-update-")
+            download_path = os.path.join(temp_dir, f"GlacierAI_V{self.version}.exe")
+            digest = hashlib.sha256()
+            downloaded = 0
+            with open(download_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    digest.update(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        self.progress.emit(min(100, int(downloaded * 100 / total)))
+            if digest.hexdigest().lower() != self.expected_sha256:
+                try:
+                    os.remove(download_path)
+                except OSError:
+                    pass
+                raise RuntimeError("下载文件的 SHA-256 校验失败，更新已取消。")
+            self.progress.emit(100)
+            self.completed.emit(download_path)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+API_URL = "https://www.hfsyapi.cn/v1/images/generations"
+API_EDIT_URL = "https://www.hfsyapi.cn/v1/images/edits"
+VIDEO_API_URL = "https://www.hfsyapi.cn/v1/video/create"
+GEMINI_API_URL_TEMPLATE = "https://www.hfsyapi.cn/v1beta/models/{model}:generateContent"
+FILE_UPLOAD_URL = "https://www.hfsyapi.cn/v1/files/image-upload"
+BALANCE_URL = "https://www.hfsyapi.cn/api/usage/token/fund"
+
+
+class ImageDownloadError(RuntimeError):
+    """Raised when an API result exists but its image cannot be downloaded."""
+
+
+def append_debug_log(message):
+    try:
+        with open("debug_output.log", "a", encoding="utf-8") as log_file:
+            log_file.write(message.rstrip() + "\n")
+    except Exception:
+        pass
+
+RATIO_LIST = ["1:1", "5:4", "9:16", "16:9", "4:3", "3:2", "4:5", "3:4", "2:3", "21:9"]
+
+GEMINI_RATIO_LIST = [
+    "1:1", "2:1", "1:2", "3:2", "2:3", "4:3", "3:4",
+    "5:4", "4:5", "16:9", "9:16", "21:9", "9:21",
+]
+
+SIZE_MAP = {
+    "1:1":  {"1k": "1024x1024", "2k": "2048x2048", "4k": "2880x2880"},
+    "5:4":  {"1k": "1040x832",  "2k": "2080x1664", "4k": "3200x2560"},
+    "9:16": {"1k": "720x1280",  "2k": "1152x2048", "4k": "2160x3840"},
+    "16:9": {"1k": "1280x720",  "2k": "2048x1152", "4k": "3840x2160"},
+    "4:3":  {"1k": "1024x768",  "2k": "2048x1536", "4k": "3264x2448"},
+    "3:2":  {"1k": "1008x672",  "2k": "2016x1344", "4k": "3504x2336"},
+    "4:5":  {"1k": "832x1040",  "2k": "1664x2080", "4k": "2560x3200"},
+    "3:4":  {"1k": "768x1024",  "2k": "1536x2048", "4k": "2448x3264"},
+    "2:3":  {"1k": "672x1008",  "2k": "1344x2016", "4k": "2336x3504"},
+    "21:9": {"1k": "1344x576",  "2k": "2016x864",  "4k": "3696x1584"},
+}
+
+GEMINI_SIZE_MAP = {
+    "1:1":  {"1k": "1024x1024", "2k": "2048x2048", "4k": "4096x4096"},
+    "2:1":  {"1k": "1408x704",  "2k": "2816x1408", "4k": "5632x2816"},
+    "1:2":  {"1k": "704x1408",  "2k": "1408x2816", "4k": "2816x5632"},
+    "3:2":  {"1k": "1248x832",  "2k": "2496x1664", "4k": "4992x3328"},
+    "2:3":  {"1k": "832x1248",  "2k": "1664x2496", "4k": "3328x4992"},
+    "4:3":  {"1k": "1024x768",  "2k": "2048x1536", "4k": "4096x3072"},
+    "3:4":  {"1k": "768x1024",  "2k": "1536x2048", "4k": "3072x4096"},
+    "5:4":  {"1k": "1120x896",  "2k": "2240x1792", "4k": "4480x3584"},
+    "4:5":  {"1k": "896x1120",  "2k": "1792x2240", "4k": "3584x4480"},
+    "16:9": {"1k": "1024x576",  "2k": "2048x1152", "4k": "4096x2304"},
+    "9:16": {"1k": "576x1024",  "2k": "1152x2048", "4k": "2304x4096"},
+    "21:9": {"1k": "1344x576",  "2k": "2688x1152", "4k": "5376x2304"},
+    "9:21": {"1k": "576x1344",  "2k": "1152x2688", "4k": "2304x5376"},
+}
+
+MODEL_QUALITY = {
+    "gpt-image-2": ["1k"],
+    "gpt-image-2pro": ["2k"],
+    "gpt-image-2pro-4k": ["2k", "4k"],
+    "nano-banana-2": ["1k", "2k", "4k"],
+    "nano-banana-pro": ["1k", "2k", "4k"],
+}
+
+GEMINI_MODELS = {"nano-banana-2", "nano-banana-pro"}
+GEMINI_MAX_REFERENCE_IMAGES = 7
+
+IMAGE_MODEL_MAX_REFS = {
+    "gpt-image-2": 6,
+    "gpt-image-2pro": 4,
+    "gpt-image-2pro-4k": 4,
+    "nano-banana-2": 7,
+    "nano-banana-pro": 7,
+}
+
+QUALITY_TO_API = {"1k": "low", "2k": "medium", "4k": "high"}
+
+VIDEO_SIZES = {"横屏": "landscape", "竖屏": "portrait"}
+VIDEO_DURATIONS = ["4", "8", "12"]
+
+
+def extract_video_first_frame_bytes(video_bytes_or_path):
+    """从视频字节或文件路径抽首帧，返回 PNG bytes，失败返回 None。"""
+    try:
+        import cv2
+        import numpy as np
+        import tempfile
+    except Exception:
+        return None
+    tmp_path = None
+    try:
+        if isinstance(video_bytes_or_path, (bytes, bytearray)):
+            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            tmp.write(video_bytes_or_path)
+            tmp.close()
+            tmp_path = tmp.name
+            path = tmp_path
+        else:
+            path = video_bytes_or_path
+        cap = cv2.VideoCapture(path)
+        try:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                return None
+            ok2, buf = cv2.imencode(".png", frame)
+            if not ok2:
+                return None
+            return bytes(buf)
+        finally:
+            cap.release()
+    except Exception:
+        return None
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+def get_or_make_thumb_for_video(video_path):
+    """对历史记录中的视频文件返回首帧 PNG 路径，缓存到同目录 .thumb.png。"""
+    if not os.path.exists(video_path):
+        return None
+    thumb_path = video_path + ".thumb.png"
+    fail_marker = video_path + ".thumb.fail"
+    if os.path.exists(thumb_path) and os.path.getmtime(thumb_path) >= os.path.getmtime(video_path):
+        return thumb_path
+    # 之前已经抽帧失败过（可能 cv2 在此机器/此视频上有问题），跳过避免再次崩溃
+    if os.path.exists(fail_marker):
+        return None
+    # 提前写失败标记：如果 cv2 native 层 segfault，下次进历史页至少不会再次崩
+    try:
+        with open(fail_marker, "wb") as f:
+            f.write(b"")
+    except Exception:
+        pass
+    png_bytes = extract_video_first_frame_bytes(video_path)
+    if not png_bytes:
+        return None
+    try:
+        with open(thumb_path, "wb") as f:
+            f.write(png_bytes)
+        try:
+            os.remove(fail_marker)
+        except Exception:
+            pass
+        return thumb_path
+    except Exception:
+        return None
+
+VIDEO_MODELS = ["sd-2 ▸", "sd-2.5 ▸", "grok-imagine-video-1.5", "minimax-h3"]
+# SD系列模型分组
+VIDEO_MODEL_GROUPS = {
+    "sd-2 ▸": ["sd-2", "sd-2-fast", "sd-2-vip", "sd-2-vip-720", "sd-2-mini-480", "sd-2-mini-720"],
+    "sd-2.5 ▸": ["sd-2.5-480", "sd-2.5-720"],
+}
+# 默认隐藏的老模型，通过下拉框末尾"更多..."展开
+VIDEO_MODELS_HIDDEN = ["sora-2", "sd-2.0 ▸", "kling-o3"]
+VIDEO_MODEL_DURATIONS = {
+    "sora-2": ["4", "8", "12"],
+    "sd-2.0": [str(i) for i in range(4, 16)],
+    "sd-2.0-mini": [str(i) for i in range(4, 16)],
+    "sd-2.0-480": [str(i) for i in range(4, 16)],
+    "sd-2.0-fast": [str(i) for i in range(4, 16)],
+    "sd-2.0-fast-480": [str(i) for i in range(4, 16)],
+    "sd-2.5-480": [str(i) for i in range(4, 31)],
+    "sd-2.5-720": [str(i) for i in range(4, 31)],
+    "kling-o3": [str(i) for i in range(5, 16)],
+    "minimax-h3": [str(i) for i in range(5, 16)],
+    "grok-imagine-video-1.5": ["6", "10", "15"],
+    "sd-2": [str(i) for i in range(5, 11)],
+    "sd-2-fast": [str(i) for i in range(5, 11)],
+    "sd-2-vip": [str(i) for i in range(5, 16)],
+    "sd-2-vip-720": [str(i) for i in range(5, 16)],
+    "sd-2-mini-480": [str(i) for i in range(5, 16)],
+    "sd-2-mini-720": [str(i) for i in range(5, 16)],
+}
+VIDEO_PROMPT_LIMIT = {"sd-2.0": 5000, "sd-2.0-mini": 5000, "sd-2.0-480": 5000, "sd-2.0-fast": 5000, "sd-2.0-fast-480": 5000, "kling-o3": 5000,
+                      "minimax-h3": 5000, "sd-2": 5000, "sd-2-fast": 5000, "sd-2-vip": 15000, "sd-2-vip-720": 15000, "sd-2-mini-480": 15000, "sd-2-mini-720": 15000, "sd-2.5-480": 5000, "sd-2.5-720": 5000, "grok-imagine-video-1.5": 4000}
+VIDEO_MODEL_ORIENTATIONS = {
+    "sora-2": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2.0": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2.0-mini": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2.0-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2.0-fast": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2.0-fast-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2.5-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2.5-720": {"横屏": "landscape", "竖屏": "portrait"},
+    "kling-o3": {"横屏": "landscape", "竖屏": "portrait", "方屏": "square"},
+    "minimax-h3": {"横屏": "landscape", "竖屏": "portrait"},
+    "grok-imagine-video-1.5": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-fast": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-vip": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-vip-720": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-mini-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-mini-720": {"横屏": "landscape", "竖屏": "portrait"},
+}
+VIDEO_MODEL_RATIOS = {
+    "sd-2.0": ["16:9", "9:16", "1:1"],
+    "sd-2.0-mini": ["16:9", "9:16", "1:1"],
+    "sd-2.0-480": ["16:9", "9:16", "1:1"],
+    "sd-2.0-fast": ["16:9", "9:16", "1:1"],
+    "sd-2.0-fast-480": ["16:9", "9:16", "1:1"],
+    "sd-2.5-480": ["16:9", "4:3", "1:1", "3:4", "9:16"],
+    "sd-2.5-720": ["16:9", "4:3", "1:1", "3:4", "9:16"],
+    "grok-imagine-video-1.5": ["16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+    "minimax-h3": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+    "sd-2": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+    "sd-2-fast": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+    "sd-2-vip": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+    "sd-2-vip-720": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+    "sd-2-mini-480": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+    "sd-2-mini-720": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+}
+VIDEO_MODEL_MAX_IMAGES_BASE = {"sora-2": 1, "sd-2.0": 4, "sd-2.0-mini": 4, "sd-2.0-480": 4, "sd-2.0-fast": 4, "sd-2.0-fast-480": 4,
+                                "sd-2.5-480": 30, "sd-2.5-720": 30, "kling-o3": 8, "minimax-h3": 5, "grok-imagine-video-1.5": 7, "sd-2": 9, "sd-2-fast": 9, "sd-2-vip": 9, "sd-2-vip-720": 9, "sd-2-mini-480": 9, "sd-2-mini-720": 9}
+VIDEO_MODEL_MAX_IMAGES_WITH_VIDEO = {"sora-2": 1, "sd-2.0": 4, "sd-2.0-mini": 4, "sd-2.0-480": 4, "sd-2.0-fast": 4, "sd-2.0-fast-480": 4,
+                                      "sd-2.5-480": 30, "sd-2.5-720": 30, "kling-o3": 8, "minimax-h3": 5, "grok-imagine-video-1.5": 7, "sd-2": 9, "sd-2-fast": 9, "sd-2-vip": 9, "sd-2-vip-720": 9, "sd-2-mini-480": 9, "sd-2-mini-720": 9}
+VIDEO_MODEL_MAX_VIDEOS = {"sora-2": 0, "sd-2.0": 3, "sd-2.0-mini": 3, "sd-2.0-480": 3, "sd-2.0-fast": 3, "sd-2.0-fast-480": 3,
+                          "sd-2.5-480": 10, "sd-2.5-720": 10, "kling-o3": 0, "minimax-h3": 0, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-vip": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
+VIDEO_MODEL_MAX_AUDIOS = {"sora-2": 0, "sd-2.0": 1, "sd-2.0-mini": 1, "sd-2.0-480": 1, "sd-2.0-fast": 1, "sd-2.0-fast-480": 1,
+                          "sd-2.5-480": 10, "sd-2.5-720": 10, "kling-o3": 0, "minimax-h3": 1, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-vip": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
+
+
+# 自定义 ComboBox，支持点击分组项时弹出子菜单
+class VideoModelComboBox(QComboBox):
+    def __init__(self, parent=None, hidden_models=None, model_groups=None, main_window=None):
+        super().__init__(parent)
+        self.hidden_models = hidden_models or []
+        self.model_groups = model_groups or {}
+        self.main_window = main_window
+        self._submenu = None
+        self._current_submenu_group = None  # 记录当前展开的分组
+        # 监听下拉列表的鼠标点击
+        self.view().viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if obj == self.view().viewport():
+            if event.type() == QEvent.MouseButtonPress:
+                index = self.view().indexAt(event.pos())
+                if index.isValid():
+                    text = self.itemText(index.row())
+                    # 检查是否点击了分组项
+                    if text in self.model_groups:
+                        # 如果当前已经展开这个分组，则关闭
+                        if self._current_submenu_group == text and self._submenu:
+                            self._submenu.close()
+                            self._submenu = None
+                            self._current_submenu_group = None
+                        else:
+                            # 展开新的子菜单
+                            self._show_submenu(text, index)
+                            self._current_submenu_group = text
+                        return True  # 阻止默认行为（防止关闭下拉列表）
+        return super().eventFilter(obj, event)
+
+    def _show_submenu(self, text, index):
+        if self._submenu:
+            self._submenu.close()
+
+        from PyQt5.QtWidgets import QMenu
+        self._submenu = QMenu(self)
+
+        # 根据当前主题动态设置样式
+        if self.main_window:
+            theme = get_theme(self.main_window._theme)
+            style = f"""
+                QMenu {{
+                    background-color: {theme['bg_combo_pop']};
+                    border: 1px solid {theme['border_soft']};
+                    color: {theme['text_primary']};
+                    padding: 4px;
+                }}
+                QMenu::item {{
+                    padding: 6px 20px;
+                }}
+                QMenu::item:selected {{
+                    background-color: {theme['bg_combo_pop_item_sel']};
+                }}
+            """
+            self._submenu.setStyleSheet(style)
+        else:
+            # 降级方案：使用暗蓝主题
+            self._submenu.setStyleSheet("""
+                QMenu { background-color: #000000; border: 1px solid rgba(125,211,252,0.1); color: #e0e8f0; padding: 4px; }
+                QMenu::item { padding: 6px 20px; }
+                QMenu::item:selected { background-color: #4a4a4a; }
+            """)
+
+        # 根据文本决定显示哪些模型
+        if text == "更多...":
+            models = self.hidden_models
+        elif text in self.model_groups:
+            models = self.model_groups[text]
+        else:
+            return
+
+        for model in models:
+            action = self._submenu.addAction(model)
+            action.triggered.connect(lambda checked, m=model: self._select_model(m))
+
+        # 计算子菜单位置：在下拉列表右侧，与当前点击项对齐
+        item_rect = self.view().visualRect(self.view().model().index(index.row(), 0))
+        item_global_pos = self.view().mapToGlobal(item_rect.topLeft())
+        popup_widget = self.view().window()
+        popup_rect = popup_widget.frameGeometry()
+
+        # 子菜单在下拉列表右边缘无缝衔接
+        self._submenu.popup(QPoint(popup_rect.right(), item_global_pos.y()))
+
+    def _select_model(self, model):
+        # 关闭下拉和子菜单
+        self.hidePopup()
+        if self._submenu:
+            self._submenu.close()
+            self._submenu = None
+        self._current_submenu_group = None  # 清除记录
+
+        # 找到该模型所属的分组
+        parent_group = None
+        for group, members in self.model_groups.items():
+            if model in members:
+                parent_group = group
+                break
+
+        if parent_group:
+            # 先移除该分组之前插入的子模型，保持列表整洁
+            for member in self.model_groups[parent_group]:
+                idx = self.findText(member)
+                if idx >= 0:
+                    self.removeItem(idx)
+            # 将选中的子模型插入到分组标题项的正后方
+            group_idx = self.findText(parent_group)
+            if group_idx >= 0:
+                self.insertItem(group_idx + 1, model)
+            else:
+                self.addItem(model)
+
+        self.setCurrentText(model)
+
+
+# 注意：下拉项的灰色高光改用纯 QSS 实现（见 DARK_STYLE 中
+# QComboBox QAbstractItemView::item:selected/hover），不再用自定义 delegate。
+# 之前 delegate 在 QSS item:selected 样式优先级下不生效，改 QSS 直接控制更稳。
+# 给所有 QComboBox 强制使用 QListView 作为下拉视图（默认是 native popup，
+# 部分平台 ::item:selected/hover 不会生效）。
+
+_orig_combo_init = QComboBox.__init__
+
+def _patched_combo_init(self, *args, **kwargs):
+    _orig_combo_init(self, *args, **kwargs)
+    try:
+        view = QListView(self)
+        view.setMouseTracking(True)
+        view.setSelectionMode(QListView.SingleSelection)
+        self.setView(view)
+        try:
+            container = view.window()
+            if container is not None:
+                container.setContentsMargins(0, 0, 0, 0)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+QComboBox.__init__ = _patched_combo_init
+
+
+# ============================================================
+# 主题系统（P1）
+# 三套主题：暗夜蓝（dark_blue）、简洁明亮（light）、爱马仕橙（hermes）
+# 每个 token 都必须三套都填，模板里通过 {key} 引用
+# ============================================================
+THEMES = {
+    "dark_blue": {
+        "name": "暗夜蓝",
+        "is_dark": True,
+        "bg_main": "#0a0e1a",
+        "bg_titlebar": "rgba(2, 6, 20, 230)",
+        "bg_sidebar": "rgba(5, 10, 25, 230)",
+        "bg_card": "rgba(15, 21, 36, 153)",
+        "bg_card_solid": "#0f1524",
+        "bg_input": "rgba(15, 23, 42, 0.6)",
+        "bg_input_strong": "rgba(15, 23, 42, 0.4)",
+        "bg_combo_pop": "#000000",
+        "bg_combo_pop_item_sel": "#4a4a4a",
+        "border_soft": "rgba(125, 211, 252, 0.1)",
+        "border_focus": "rgba(125, 211, 252, 0.4)",
+        "border_top_alpha": "rgba(255, 255, 255, 0.1)",
+        "text_primary": "#e0e8f0",
+        "text_input": "#a0b4c4",
+        "text_secondary": "#94a3b8",
+        "text_muted": "#64748b",
+        "text_dim": "#475569",
+        "accent": "#7dd3fc",
+        "accent_strong": "#bae6fd",
+        "accent_soft": "rgba(125, 211, 252, 0.15)",
+        "accent_softer": "rgba(125, 211, 252, 0.1)",
+        "accent_hover": "rgba(125, 211, 252, 0.25)",
+        "accent_press": "rgba(125, 211, 252, 0.35)",
+        "accent_border": "rgba(125, 211, 252, 0.3)",
+        "accent_selection": "rgba(125, 211, 252, 0.3)",
+        "scrollbar_track": "rgba(15, 21, 36, 0.3)",
+        "scrollbar_thumb": "rgba(125, 211, 252, 0.2)",
+        "scrollbar_thumb_hover": "rgba(125, 211, 252, 0.35)",
+        "preview_dash": "rgba(125, 211, 252, 0.2)",
+        "btn_disabled_bg": "rgba(30, 41, 59, 0.5)",
+        "btn_disabled_border": "rgba(100, 116, 139, 0.2)",
+        "btn_disabled_text": "#475569",
+        "save_disabled_text": "#334155",
+        "section_badge_bg": "rgba(30, 41, 59, 0.5)",
+        "down_arrow_color": "#64748b",
+        "footer_bg": "rgba(15, 21, 36, 0.6)",
+        "footer_brand": "rgba(125, 211, 252, 0.4)",
+        "version_color": "#ff9f1c",
+    },
+    "light": {
+        "name": "简洁明亮",
+        "is_dark": False,
+        "bg_main": "#faf8ff",
+        "bg_titlebar": "rgba(255, 255, 255, 240)",
+        "bg_sidebar": "#ffffff",
+        "bg_card": "#ffffff",
+        "bg_card_solid": "#ffffff",
+        "bg_input": "#f2f3ff",
+        "bg_input_strong": "#f2f3ff",
+        "bg_combo_pop": "#ffffff",
+        "bg_combo_pop_item_sel": "#dce1ff",
+        "border_soft": "#c3c5d9",
+        "border_focus": "#0043c8",
+        "border_top_alpha": "rgba(19, 27, 46, 0.08)",
+        "text_primary": "#131b2e",
+        "text_input": "#131b2e",
+        "text_secondary": "#434656",
+        "text_muted": "#737688",
+        "text_dim": "#9aa0b4",
+        "accent": "#0043c8",
+        "accent_strong": "#0057ff",
+        "accent_soft": "#dce1ff",
+        "accent_softer": "#eaedff",
+        "accent_hover": "#c7d1f8",
+        "accent_press": "#b0bef5",
+        "accent_border": "#0043c8",
+        "accent_selection": "#dce1ff",
+        "scrollbar_track": "rgba(19, 27, 46, 0.04)",
+        "scrollbar_thumb": "rgba(0, 67, 200, 0.25)",
+        "scrollbar_thumb_hover": "rgba(0, 67, 200, 0.45)",
+        "preview_dash": "#c3c5d9",
+        "btn_disabled_bg": "#e7e9f3",
+        "btn_disabled_border": "#c3c5d9",
+        "btn_disabled_text": "#9aa0b4",
+        "save_disabled_text": "#b0b6c8",
+        "section_badge_bg": "#eaedff",
+        "down_arrow_color": "#737688",
+        "footer_bg": "#f2f3ff",
+        "footer_brand": "rgba(0, 67, 200, 0.55)",
+        "version_color": "#0043c8",
+    },
+    "hermes": {
+        "name": "爱马仕橙",
+        "is_dark": False,
+        "bg_main": "#fbf9f9",
+        "bg_titlebar": "rgba(255, 255, 255, 240)",
+        "bg_sidebar": "#ffffff",
+        "bg_card": "#ffffff",
+        "bg_card_solid": "#ffffff",
+        "bg_input": "#f5f3f3",
+        "bg_input_strong": "#fbf9f9",
+        "bg_combo_pop": "#ffffff",
+        "bg_combo_pop_item_sel": "#ffdbc9",
+        "border_soft": "rgba(28, 28, 28, 0.10)",
+        "border_focus": "#ff7700",
+        "border_top_alpha": "rgba(28, 28, 28, 0.08)",
+        "text_primary": "#1b1c1c",
+        "text_input": "#1b1c1c",
+        "text_secondary": "#5f5e5e",
+        "text_muted": "#8c7163",
+        "text_dim": "#a19f9a",
+        "accent": "#ff7700",
+        "accent_strong": "#9b4600",
+        "accent_soft": "#ffdbc9",
+        "accent_softer": "#fff1e8",
+        "accent_hover": "#ffc6a8",
+        "accent_press": "#ffb68d",
+        "accent_border": "#ff7700",
+        "accent_selection": "#ffdbc9",
+        "scrollbar_track": "rgba(28, 28, 28, 0.05)",
+        "scrollbar_thumb": "rgba(255, 119, 0, 0.45)",
+        "scrollbar_thumb_hover": "#ff7700",
+        "preview_dash": "#e0c0b0",
+        "btn_disabled_bg": "#efeded",
+        "btn_disabled_border": "#dbdad9",
+        "btn_disabled_text": "#a19f9a",
+        "save_disabled_text": "#c9c6c1",
+        "section_badge_bg": "#efeded",
+        "down_arrow_color": "#8c7163",
+        "footer_bg": "#f5f3f3",
+        "footer_brand": "rgba(155, 70, 0, 0.65)",
+        "version_color": "#9b4600",
+    },
+}
+
+DEFAULT_THEME = "light"
+
+
+def get_theme(name):
+    return THEMES.get(name, THEMES[DEFAULT_THEME])
+
+
+def build_main_style(theme_name):
+    t = get_theme(theme_name)
+    return Template(MAIN_STYLE_TEMPLATE).safe_substitute(t)
+
+
+def build_login_style(theme_name):
+    t = get_theme(theme_name)
+    return Template(LOGIN_STYLE_TEMPLATE).safe_substitute(t)
+
+
+def build_settings_dialog_style(theme_name):
+    t = get_theme(theme_name)
+    return Template(SETTINGS_DIALOG_STYLE_TEMPLATE).safe_substitute(t)
 
 
 MAIN_STYLE_TEMPLATE = """
@@ -5904,6 +7051,23 @@ class MainWindow(QMainWindow):
                 )
                 dl_btn.clicked.connect(lambda checked, files=img_files, labels=thumb_labels: self._download_history_images(files, labels))
                 card_layout.addWidget(dl_btn)
+            else:
+                no_file_lbl = QLabel("未下载到图片")
+                no_file_lbl.setStyleSheet(
+                    f"color: {theme['text_muted']}; font-size: 11px; border: none; background: transparent;"
+                )
+                card_layout.addWidget(no_file_lbl)
+
+            self.history_layout.addWidget(card)
+
+        self.history_layout.addStretch()
+
+    def _download_history_images(self, img_files, labels=None):
+        download_files = []
+        if labels:
+            selected = [lbl._hist_file for lbl in labels if lbl.checked]
+            if selected:
+                download_files = selected
             else:
                 no_file_lbl = QLabel("未下载到图片")
                 no_file_lbl.setStyleSheet(
