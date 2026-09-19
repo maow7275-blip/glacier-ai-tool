@@ -24,7 +24,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QPoint, QRect, QTimer, 
 from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinearGradient, QBrush, QPen, QPainterPath
 
 
-APP_VERSION = "3.8.8"
+APP_VERSION = "3.9"
 UPDATE_MANIFEST_URLS = (
     "https://www.updateglacieraiw.com/update.json",
     "https://raw.githubusercontent.com/maow7275-blip/glacier-ai-tool/main/update.json",
@@ -291,39 +291,75 @@ GEMINI_SIZE_MAP = {
 
 MODEL_QUALITY = {
     "gpt-image-2": ["1k"],
+    "gpt-image-2.5": ["1k"],
+    "gpt-image-2pro": ["2k"],
+    "gpt-image-2pro-4k": ["2k", "4k"],
     "gpt-image-2.5-flare": ["1k", "2k", "4k"],
     "gpt-image-2.5-sunburst": ["1k", "2k", "4k"],
     "seedream-5.0-pro": ["1k"],
+    "gemini-3.1-flash-image-preview": ["1k", "2k", "4k"],
+    "gemini-3-pro-image-preview": ["1k", "2k", "4k"],
     "nano-banana-2": ["1k", "2k", "4k"],
     "nano-banana-pro": ["1k", "2k", "4k"],
 }
 
-GEMINI_MODELS = {"nano-banana-2", "nano-banana-pro"}
+GEMINI_MODELS = {
+    "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image-preview",
+    "nano-banana-2",
+    "nano-banana-pro",
+}
 GEMINI_MAX_REFERENCE_IMAGES = 7
+GEMINI_MAX_REFERENCE_IMAGES_BY_MODEL = {
+    "gemini-3.1-flash-image-preview": 4,
+    "gemini-3-pro-image-preview": 7,
+    "nano-banana-2": 4,
+    "nano-banana-pro": 7,
+}
 
 IMAGE_MODEL_MAX_REFS = {
     "gpt-image-2": 6,
+    "gpt-image-2.5": 6,
+    "gpt-image-2pro": 4,
+    "gpt-image-2pro-4k": 4,
     "gpt-image-2.5-flare": 16,
     "gpt-image-2.5-sunburst": 16,
     "seedream-5.0-pro": 10,
-    "nano-banana-2": 7,
+    "gemini-3.1-flash-image-preview": 4,
+    "gemini-3-pro-image-preview": 7,
+    "nano-banana-2": 4,
     "nano-banana-pro": 7,
 }
 
 IMAGE_MODEL_MAX_REF_BYTES = {
     "gpt-image-2": 5 * 1024 * 1024,
+    "gpt-image-2.5": 20 * 1024 * 1024,
+    "gpt-image-2pro": 5 * 1024 * 1024,
+    "gpt-image-2pro-4k": 5 * 1024 * 1024,
+    "gpt-image-2.5-flare": 20 * 1024 * 1024,
+    "gpt-image-2.5-sunburst": 20 * 1024 * 1024,
     "seedream-5.0-pro": 5 * 1024 * 1024,
+    "gemini-3.1-flash-image-preview": 5 * 1024 * 1024,
+    "gemini-3-pro-image-preview": 5 * 1024 * 1024,
+    "nano-banana-2": 5 * 1024 * 1024,
+    "nano-banana-pro": 5 * 1024 * 1024,
 }
 IMAGE_MODEL_MAX_REF_TOTAL_BYTES = {
+    "gpt-image-2.5": 25 * 1024 * 1024,
     "gpt-image-2.5-flare": 25 * 1024 * 1024,
     "gpt-image-2.5-sunburst": 25 * 1024 * 1024,
 }
 
 IMAGE_MODEL_RATIOS = {
     "gpt-image-2": RATIO_LIST,
+    "gpt-image-2.5": RATIO_LIST,
+    "gpt-image-2pro": RATIO_LIST,
+    "gpt-image-2pro-4k": RATIO_LIST,
     "gpt-image-2.5-flare": RATIO_LIST,
     "gpt-image-2.5-sunburst": RATIO_LIST,
     "seedream-5.0-pro": SEEDREAM_RATIO_LIST,
+    "gemini-3.1-flash-image-preview": RATIO_LIST,
+    "gemini-3-pro-image-preview": GEMINI_RATIO_LIST,
 }
 
 IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND = {
@@ -407,11 +443,15 @@ def get_or_make_thumb_for_video(video_path):
     except Exception:
         return None
 
-VIDEO_MODELS = ["sd-2.0 ▸", "sd-2.5 ▸", "minimax-h3"]
-# SD 系列模型分组。旧版 sd-2 与 Grok 模型不再放入下拉框。
+# 当前 API 可用的视频模型分组。模型名称与 /api/pricing 保持一致。
+VIDEO_MODELS = ["sd-2 ▸", "sd-2.5 ▸", "video-2.5", "minimax-h3"]
 VIDEO_MODEL_GROUPS = {
-    "sd-2.0 ▸": ["sd-2.0", "sd-2.0-mini", "sd-2.0-480", "sd-2.0-fast", "sd-2.0-fast-480"],
-    "sd-2.5 ▸": ["sd-2.5-480", "sd-2.5-720"],
+    "sd-2 ▸": [
+        "sd-2-fast-480", "sd-2-fast-720",
+        "sd-2-mini-480", "sd-2-mini-720",
+        "sd-2-vip-480", "sd-2-vip-720",
+    ],
+    "sd-2.5 ▸": ["sd-2.5-480", "sd-2.5-720", "sd-2.5-1080"],
 }
 # 仅保留暂未开放的模型；这些模型不会出现在默认下拉框中。
 VIDEO_MODELS_HIDDEN = ["sora-2", "kling-o3"]
@@ -424,6 +464,14 @@ VIDEO_MODEL_DURATIONS = {
     "sd-2.0-fast-480": [str(i) for i in range(4, 16)],
     "sd-2.5-480": [str(i) for i in range(4, 31)],
     "sd-2.5-720": [str(i) for i in range(4, 31)],
+    "sd-2.5-1080": [str(i) for i in range(4, 31)],
+    "sd-2-fast-480": [str(i) for i in range(5, 16)],
+    "sd-2-fast-720": [str(i) for i in range(5, 16)],
+    "sd-2-mini-480": [str(i) for i in range(5, 16)],
+    "sd-2-mini-720": [str(i) for i in range(5, 16)],
+    "sd-2-vip-480": [str(i) for i in range(5, 16)],
+    "sd-2-vip-720": [str(i) for i in range(5, 16)],
+    "video-2.5": [str(i) for i in range(4, 13)],
     "kling-o3": [str(i) for i in range(5, 16)],
     "minimax-h3": [str(i) for i in range(5, 16)],
     "grok-imagine-video-1.5": ["6", "10", "15"],
@@ -435,7 +483,8 @@ VIDEO_MODEL_DURATIONS = {
     "sd-2-mini-720": [str(i) for i in range(5, 16)],
 }
 VIDEO_PROMPT_LIMIT = {"sd-2.0": 3500, "sd-2.0-mini": 3500, "sd-2.0-480": 3500, "sd-2.0-fast": 5000, "sd-2.0-fast-480": 5000, "kling-o3": 5000,
-                      "minimax-h3": 5000, "sd-2": 5000, "sd-2-fast": 5000, "sd-2-vip": 15000, "sd-2-vip-720": 15000, "sd-2-mini-480": 15000, "sd-2-mini-720": 15000, "sd-2.5-480": 5000, "sd-2.5-720": 5000, "grok-imagine-video-1.5": 4000}
+                      "minimax-h3": 10000, "video-2.5": 10000, "sd-2": 5000, "sd-2-fast": 10000, "sd-2-vip": 10000, "sd-2-vip-720": 10000, "sd-2-mini-480": 10000, "sd-2-mini-720": 10000,
+                      "sd-2-fast-720": 10000, "sd-2-vip-480": 10000, "sd-2.5-480": 10000, "sd-2.5-720": 10000, "sd-2.5-1080": 10000, "grok-imagine-video-1.5": 4000}
 VIDEO_MODEL_ORIENTATIONS = {
     "sora-2": {"横屏": "landscape", "竖屏": "portrait"},
     "sd-2.0": {"横屏": "landscape", "竖屏": "portrait"},
@@ -445,6 +494,14 @@ VIDEO_MODEL_ORIENTATIONS = {
     "sd-2.0-fast-480": {"横屏": "landscape", "竖屏": "portrait"},
     "sd-2.5-480": {"横屏": "landscape", "竖屏": "portrait"},
     "sd-2.5-720": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2.5-1080": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-fast-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-fast-720": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-mini-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-mini-720": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-vip-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-vip-720": {"横屏": "landscape", "竖屏": "portrait"},
+    "video-2.5": {"横屏": "landscape", "竖屏": "portrait"},
     "kling-o3": {"横屏": "landscape", "竖屏": "portrait", "方屏": "square"},
     "minimax-h3": {"横屏": "landscape", "竖屏": "portrait"},
     "grok-imagine-video-1.5": {"横屏": "landscape", "竖屏": "portrait"},
@@ -463,6 +520,14 @@ VIDEO_MODEL_RATIOS = {
     "sd-2.0-fast-480": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
     "sd-2.5-480": ["16:9", "4:3", "1:1", "3:4", "9:16"],
     "sd-2.5-720": ["16:9", "4:3", "1:1", "3:4", "9:16"],
+    "sd-2.5-1080": ["9:16", "3:4", "1:1", "4:3", "16:9"],
+    "sd-2-fast-480": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
+    "sd-2-fast-720": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
+    "sd-2-mini-480": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
+    "sd-2-mini-720": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
+    "sd-2-vip-480": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
+    "sd-2-vip-720": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
+    "video-2.5": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
     "grok-imagine-video-1.5": ["16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
     "minimax-h3": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
     "sd-2": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
@@ -473,19 +538,27 @@ VIDEO_MODEL_RATIOS = {
     "sd-2-mini-720": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
 }
 VIDEO_MODEL_MAX_IMAGES_BASE = {"sora-2": 1, "sd-2.0": 4, "sd-2.0-mini": 4, "sd-2.0-480": 4, "sd-2.0-fast": 4, "sd-2.0-fast-480": 4,
-                                "sd-2.5-480": 30, "sd-2.5-720": 30, "kling-o3": 8, "minimax-h3": 5, "grok-imagine-video-1.5": 7, "sd-2": 9, "sd-2-fast": 9, "sd-2-vip": 9, "sd-2-vip-720": 9, "sd-2-mini-480": 9, "sd-2-mini-720": 9}
+                                "sd-2.5-480": 30, "sd-2.5-720": 30, "sd-2.5-1080": 30, "kling-o3": 8, "minimax-h3": 9, "video-2.5": 5, "grok-imagine-video-1.5": 7, "sd-2": 9, "sd-2-fast": 9, "sd-2-fast-480": 9, "sd-2-fast-720": 9, "sd-2-vip": 9, "sd-2-vip-480": 9, "sd-2-vip-720": 9, "sd-2-mini-480": 9, "sd-2-mini-720": 9}
 VIDEO_MODEL_MAX_IMAGES_WITH_VIDEO = {"sora-2": 1, "sd-2.0": 4, "sd-2.0-mini": 4, "sd-2.0-480": 4, "sd-2.0-fast": 4, "sd-2.0-fast-480": 4,
-                                      "sd-2.5-480": 30, "sd-2.5-720": 30, "kling-o3": 8, "minimax-h3": 5, "grok-imagine-video-1.5": 7, "sd-2": 9, "sd-2-fast": 9, "sd-2-vip": 9, "sd-2-vip-720": 9, "sd-2-mini-480": 9, "sd-2-mini-720": 9}
+                                      "sd-2.5-480": 30, "sd-2.5-720": 30, "sd-2.5-1080": 30, "kling-o3": 8, "minimax-h3": 9, "video-2.5": 5, "grok-imagine-video-1.5": 7, "sd-2": 9, "sd-2-fast": 9, "sd-2-fast-480": 9, "sd-2-fast-720": 9, "sd-2-vip": 9, "sd-2-vip-480": 9, "sd-2-vip-720": 9, "sd-2-mini-480": 9, "sd-2-mini-720": 9}
 VIDEO_MODEL_MAX_VIDEOS = {"sora-2": 0, "sd-2.0": 3, "sd-2.0-mini": 3, "sd-2.0-480": 3, "sd-2.0-fast": 3, "sd-2.0-fast-480": 3,
-                          "sd-2.5-480": 10, "sd-2.5-720": 10, "kling-o3": 0, "minimax-h3": 0, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-vip": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
+                          "sd-2.5-480": 10, "sd-2.5-720": 10, "sd-2.5-1080": 10, "kling-o3": 0, "minimax-h3": 0, "video-2.5": 1, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-fast-480": 3, "sd-2-fast-720": 3, "sd-2-vip": 3, "sd-2-vip-480": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
 VIDEO_MODEL_MAX_AUDIOS = {"sora-2": 0, "sd-2.0": 1, "sd-2.0-mini": 1, "sd-2.0-480": 1, "sd-2.0-fast": 1, "sd-2.0-fast-480": 1,
-                          "sd-2.5-480": 10, "sd-2.5-720": 10, "kling-o3": 0, "minimax-h3": 1, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-vip": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
+                          "sd-2.5-480": 10, "sd-2.5-720": 10, "sd-2.5-1080": 10, "kling-o3": 0, "minimax-h3": 3, "video-2.5": 3, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-fast-480": 3, "sd-2-fast-720": 3, "sd-2-vip": 3, "sd-2-vip-480": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
 VIDEO_MODEL_MAX_IMAGE_TOTAL_BYTES = {
     "sd-2.0": 30 * 1024 * 1024,
     "sd-2.0-mini": 30 * 1024 * 1024,
     "sd-2.0-480": 30 * 1024 * 1024,
     "sd-2.0-fast": 30 * 1024 * 1024,
     "sd-2.0-fast-480": 30 * 1024 * 1024,
+    "sd-2-mini-480": 30 * 1024 * 1024,
+    "sd-2-mini-720": 30 * 1024 * 1024,
+    "sd-2-vip-480": 30 * 1024 * 1024,
+    "sd-2-vip-720": 30 * 1024 * 1024,
+    "sd-2.5-480": 30 * 1024 * 1024,
+    "sd-2.5-720": 30 * 1024 * 1024,
+    "sd-2.5-1080": 30 * 1024 * 1024,
+    "video-2.5": 30 * 1024 * 1024,
 }
 
 
@@ -1354,7 +1427,7 @@ class KeyDialog(QDialog):
         subtitle.setObjectName("loginSubtitle")
         card_layout.addWidget(subtitle)
 
-        version = QLabel("VERSION 3.8.1")
+        version = QLabel("VERSION 3.9")
         version.setObjectName("loginVersion")
         card_layout.addWidget(version)
 
@@ -1792,7 +1865,8 @@ class GenerateThread(QThread):
 
         parts = [{"text": self.prompt}]
         if self.image_url:
-            for url in list(self.image_url)[:GEMINI_MAX_REFERENCE_IMAGES]:
+            max_refs = GEMINI_MAX_REFERENCE_IMAGES_BY_MODEL.get(self.model, GEMINI_MAX_REFERENCE_IMAGES)
+            for url in list(self.image_url)[:max_refs]:
                 parts.append({"fileData": {"fileUri": url}})
 
         ratio = "1:1"
@@ -1857,6 +1931,10 @@ class GenerateThread(QThread):
             self.error.emit(index, f"第{index+1}张未找到图片地址")
             return
 
+        if isinstance(img_url, (bytes, bytearray)):
+            self.one_finished.emit(index, bytes(img_url))
+            return
+
         if img_url.startswith("/"):
             img_url = "https://www.hfsyapi.cn" + img_url
 
@@ -1882,7 +1960,13 @@ class GenerateThread(QThread):
                             return uri
                     inline = p.get("inlineData") or p.get("inline_data")
                     if inline and inline.get("data"):
-                        return None
+                        encoded = inline["data"]
+                        try:
+                            if isinstance(encoded, str) and encoded.startswith("data:"):
+                                encoded = encoded.split(",", 1)[1]
+                            return base64.b64decode(re.sub(r"\s+", "", encoded), validate=True)
+                        except (ValueError, TypeError):
+                            return None
         except Exception as e:
             print(f"[DEBUG] _extract_gemini_image_url error: {e}", flush=True)
         return None
@@ -4075,9 +4159,14 @@ class MainWindow(QMainWindow):
         setup_combo(self.model_combo)
         self.model_combo.addItems([
             "gpt-image-2",
+            "gpt-image-2.5",
+            "gpt-image-2pro",
+            "gpt-image-2pro-4k",
             "gpt-image-2.5-flare",
             "gpt-image-2.5-sunburst",
             "seedream-5.0-pro",
+            "gemini-3.1-flash-image-preview",
+            "gemini-3-pro-image-preview",
             "nano-banana-2",
             "nano-banana-pro",
         ])
@@ -4447,7 +4536,7 @@ class MainWindow(QMainWindow):
         )
         setup_combo(self.video_model_combo)
         self.video_model_combo.addItems(VIDEO_MODELS)
-        self.video_model_combo._select_model("sd-2.0")
+        self.video_model_combo._select_model("sd-2-fast-480")
         self.video_model_combo.currentTextChanged.connect(self.on_video_model_changed)
         grid.addWidget(self.video_model_combo, 1, 0)
 
@@ -4703,7 +4792,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "提示", f"无法读取图片大小：{os.path.basename(path)} ({exc})")
                 continue
             if max_each_bytes and file_size > max_each_bytes:
-                QMessageBox.warning(self, "提示", f"{os.path.basename(path)} 超过单张 5MB 限制")
+                max_mb = max_each_bytes / (1024 * 1024)
+                QMessageBox.warning(self, "提示", f"{os.path.basename(path)} 超过单张 {max_mb:g}MB 限制")
                 continue
             if max_total_bytes and existing_total + file_size > max_total_bytes:
                 QMessageBox.warning(self, "提示", "参考图总大小不能超过 25MB")
@@ -4944,7 +5034,7 @@ class MainWindow(QMainWindow):
             self.vid_img_ref_preview_layout.addWidget(container, row, col)
         count = len(self._vid_img_ref_data_list)
         uploading_count = sum(1 for s in self._vid_img_ref_data_list if s.get("uploading"))
-        max_imgs = 1 if self.video_model_combo.currentText() == "sora-2" else 4
+        max_imgs = self._current_max_images()
         if uploading_count:
             self.vid_img_ref_count_label.setText(f"已选择 {count}/{max_imgs} 张（上传中 {uploading_count}）")
         else:
@@ -5197,7 +5287,8 @@ class MainWindow(QMainWindow):
         is_grok = model == "grok-imagine-video-1.5"
 
         is_sd_new = model in ("sd-2.0", "sd-2.0-mini", "sd-2.0-480", "sd-2.0-fast", "sd-2.0-fast-480")
-        is_sd_25 = model in ("sd-2.5-480", "sd-2.5-720")
+        is_sd_25 = model in ("sd-2.5-480", "sd-2.5-720", "sd-2.5-1080")
+        is_video_25 = model == "video-2.5"
 
         if is_sd_25:
             self.vid_video_ref_card.setVisible(True)
@@ -5216,6 +5307,11 @@ class MainWindow(QMainWindow):
             self.vid_audio_ref_card.setVisible(True)
         elif is_minimax:
             self.vid_video_ref_card.setVisible(False)
+            self.vid_audio_ref_card.setVisible(True)
+        elif is_video_25:
+            self.vid_video_ref_card.setVisible(True)
+            self.vid_video_ref_title.setText("参考视频（可选）")
+            self.vid_video_ref_hint.setText("提示：最多 1 条，单段 4–12s，必须公网 URL")
             self.vid_audio_ref_card.setVisible(True)
         elif is_grok:
             self.vid_video_ref_card.setVisible(False)
@@ -5255,6 +5351,8 @@ class MainWindow(QMainWindow):
             self.vid_img_ref_hint.setText("提示：最多 9 张，单图 ≤30MB，所有素材总 ≤64MB；prompt 中可用 @1 @2... 引用")
         elif is_kling:
             self.vid_img_ref_hint.setText("提示：最多 8 张参考图片，不支持视频/音频")
+        elif is_video_25:
+            self.vid_img_ref_hint.setText("提示：最多 5 张参考图片，单图 ≤20MB；prompt 中可用 @图片1 @图片2... 引用")
 
         # 更新音频提示
         if is_sd_25:
@@ -5265,6 +5363,8 @@ class MainWindow(QMainWindow):
             self.vid_audio_ref_hint.setText("提示：最多 3 条，单条 ≤15MB，总时长 ≤15s，必须公网 URL；prompt 中可用 @声音1 @声音2... 引用")
         elif is_minimax:
             self.vid_audio_ref_hint.setText("提示：最多 1 条，单条 ≤15MB，必须公网 URL；prompt 中可用 @声音1 引用")
+        elif is_video_25:
+            self.vid_audio_ref_hint.setText("提示：最多 3 条，单条 ≤15MB，必须公网 URL；prompt 中可用 @声音1 @声音2... 引用")
 
         max_imgs = self._current_max_images()
         max_vids = self._current_max_videos()
@@ -5306,11 +5406,12 @@ class MainWindow(QMainWindow):
         self.size_combo.blockSignals(True)
         self.size_combo.clear()
         if model in GEMINI_MODELS:
-            self.size_combo.addItems(GEMINI_RATIO_LIST)
-            if current_ratio in GEMINI_RATIO_LIST:
+            ratios = IMAGE_MODEL_RATIOS.get(model, GEMINI_RATIO_LIST)
+            self.size_combo.addItems(ratios)
+            if current_ratio in ratios:
                 self.size_combo.setCurrentText(current_ratio)
             else:
-                self.size_combo.setCurrentText("1:1")
+                self.size_combo.setCurrentText(ratios[0])
         else:
             ratios = IMAGE_MODEL_RATIOS.get(model, RATIO_LIST)
             self.size_combo.addItems(ratios)
@@ -5333,9 +5434,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "img_ref_hint"):
             hint = f"提示：参考图最多 {max_refs} 张"
             if max_each_bytes:
-                hint += "，单张不超过 5MB"
-            elif max_total_bytes:
-                hint += "，总大小不超过 25MB"
+                hint += f"，单张不超过 {max_each_bytes / (1024 * 1024):g}MB"
+            if max_total_bytes:
+                hint += f"，总大小不超过 {max_total_bytes / (1024 * 1024):g}MB"
             self.img_ref_hint.setText(hint)
         if len(self._img_ref_data_list) > max_refs:
             self._img_ref_data_list[:] = self._img_ref_data_list[:max_refs]
@@ -5437,6 +5538,9 @@ class MainWindow(QMainWindow):
         vid_img_urls = [s["url"] for s in self._vid_img_ref_data_list if s.get("url")]
         vid_video_urls = list(self._vid_video_ref_url_list)
         vid_audio_urls = list(self._vid_audio_ref_url_list)
+        if model == "minimax-h3" and not vid_img_urls:
+            QMessageBox.warning(self, "提示", "minimax-h3 至少需要 1 张参考图片")
+            return
         max_images = self._current_max_images()
         max_videos = self._current_max_videos()
         max_audios = self._current_max_audios()
