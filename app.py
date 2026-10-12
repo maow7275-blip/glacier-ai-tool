@@ -238,6 +238,10 @@ def append_debug_log(message):
 
 RATIO_LIST = ["1:1", "5:4", "9:16", "16:9", "4:3", "3:2", "4:5", "3:4", "2:3", "21:9"]
 
+FLARE_SUNBURST_RATIO_LIST = [
+    "1:1", "16:9", "9:16", "5:4", "4:3", "3:2", "3:1", "3:4",
+]
+
 # Image generation models served by /v1/images/generations.  The API uses the
 # requested pixel dimensions as the quality selector, so these values are
 # intentionally kept separate from the Gemini image configuration below.
@@ -255,6 +259,7 @@ SIZE_MAP = {
     "16:9": {"1k": "1280x720",  "2k": "2048x1152", "4k": "3840x2160"},
     "4:3":  {"1k": "1024x768",  "2k": "2048x1536", "4k": "3264x2448"},
     "3:2":  {"1k": "1008x672",  "2k": "2016x1344", "4k": "3504x2336"},
+    "3:1":  {"1k": "1536x512",  "2k": "3072x1024", "4k": "4096x1365"},
     "4:5":  {"1k": "832x1040",  "2k": "1664x2080", "4k": "2560x3200"},
     "3:4":  {"1k": "768x1024",  "2k": "1536x2048", "4k": "2448x3264"},
     "2:3":  {"1k": "672x1008",  "2k": "1344x2016", "4k": "2336x3504"},
@@ -359,8 +364,8 @@ IMAGE_MODEL_RATIOS = {
     "gpt-image-2.5": RATIO_LIST,
     "gpt-image-2pro": RATIO_LIST,
     "gpt-image-2pro-4k": RATIO_LIST,
-    "gpt-image-2.5-flare": RATIO_LIST,
-    "gpt-image-2.5-sunburst": RATIO_LIST,
+    "gpt-image-2.5-flare": FLARE_SUNBURST_RATIO_LIST,
+    "gpt-image-2.5-sunburst": FLARE_SUNBURST_RATIO_LIST,
     "seedream-5.0-pro": SEEDREAM_RATIO_LIST,
     "gemini-3.1-flash-image-preview": RATIO_LIST,
     "gemini-3-pro-image-preview": GEMINI_RATIO_LIST,

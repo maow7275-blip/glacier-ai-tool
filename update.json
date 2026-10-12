@@ -1,8 +1,8 @@
 {
   "version": "4.0",
-  "notes": "同步 hfsyapi 最新图片模型，新增 nano-banana-2.1，并按模型更新图片参考素材限制。",
+  "notes": "同步 hfsyapi 最新图片模型，新增 nano-banana-2.1，并更新 flare/sunburst 比例支持与图片参考素材限制。",
   "windows": {
     "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V4.0.exe",
-    "sha256": "be226faaedbb68e0bc91a109f1aa14e283e717b8ac2048b9d9ba6107c80fce16"
+    "sha256": "23534d03c655314f6d9492014baac5bbb6ecddbaee23ccfded493eb284328dda"
   }
 }
