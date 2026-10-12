@@ -1,8 +1,8 @@
 {
-  "version": "3.9",
-  "notes": "同步 hfsyapi 最新图片与视频模型，并按模型更新分辨率、比例及时长和参考素材限制。",
+  "version": "4.0",
+  "notes": "同步 hfsyapi 最新图片模型，新增 nano-banana-2.1，并按模型更新图片参考素材限制。",
   "windows": {
-    "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V3.9.exe",
-    "sha256": "69752e4d835028eaed2f109037ec9f98ced53f66920cd347e7c0afe5364b4ce7"
+    "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V4.0.exe",
+    "sha256": "be226faaedbb68e0bc91a109f1aa14e283e717b8ac2048b9d9ba6107c80fce16"
   }
 }

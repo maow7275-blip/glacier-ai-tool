@@ -24,7 +24,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QPoint, QRect, QTimer, 
 from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinearGradient, QBrush, QPen, QPainterPath
 
 
-APP_VERSION = "3.9"
+APP_VERSION = "4.0"
 UPDATE_MANIFEST_URLS = (
     "https://www.updateglacieraiw.com/update.json",
     "https://raw.githubusercontent.com/maow7275-blip/glacier-ai-tool/main/update.json",
@@ -300,6 +300,7 @@ MODEL_QUALITY = {
     "gemini-3.1-flash-image-preview": ["1k", "2k", "4k"],
     "gemini-3-pro-image-preview": ["1k", "2k", "4k"],
     "nano-banana-2": ["1k", "2k", "4k"],
+    "nano-banana-2.1": ["1k", "2k", "4k"],
     "nano-banana-pro": ["1k", "2k", "4k"],
 }
 
@@ -307,6 +308,7 @@ GEMINI_MODELS = {
     "gemini-3.1-flash-image-preview",
     "gemini-3-pro-image-preview",
     "nano-banana-2",
+    "nano-banana-2.1",
     "nano-banana-pro",
 }
 GEMINI_MAX_REFERENCE_IMAGES = 7
@@ -314,6 +316,7 @@ GEMINI_MAX_REFERENCE_IMAGES_BY_MODEL = {
     "gemini-3.1-flash-image-preview": 4,
     "gemini-3-pro-image-preview": 7,
     "nano-banana-2": 4,
+    "nano-banana-2.1": 4,
     "nano-banana-pro": 7,
 }
 
@@ -342,6 +345,7 @@ IMAGE_MODEL_MAX_REF_BYTES = {
     "gemini-3.1-flash-image-preview": 5 * 1024 * 1024,
     "gemini-3-pro-image-preview": 5 * 1024 * 1024,
     "nano-banana-2": 5 * 1024 * 1024,
+    "nano-banana-2.1": 5 * 1024 * 1024,
     "nano-banana-pro": 5 * 1024 * 1024,
 }
 IMAGE_MODEL_MAX_REF_TOTAL_BYTES = {
@@ -360,6 +364,9 @@ IMAGE_MODEL_RATIOS = {
     "seedream-5.0-pro": SEEDREAM_RATIO_LIST,
     "gemini-3.1-flash-image-preview": RATIO_LIST,
     "gemini-3-pro-image-preview": GEMINI_RATIO_LIST,
+    "nano-banana-2": RATIO_LIST,
+    "nano-banana-2.1": RATIO_LIST,
+    "nano-banana-pro": GEMINI_RATIO_LIST,
 }
 
 IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND = {
@@ -1427,7 +1434,7 @@ class KeyDialog(QDialog):
         subtitle.setObjectName("loginSubtitle")
         card_layout.addWidget(subtitle)
 
-        version = QLabel("VERSION 3.9")
+        version = QLabel("VERSION 4.0")
         version.setObjectName("loginVersion")
         card_layout.addWidget(version)
 
@@ -4168,6 +4175,7 @@ class MainWindow(QMainWindow):
             "gemini-3.1-flash-image-preview",
             "gemini-3-pro-image-preview",
             "nano-banana-2",
+            "nano-banana-2.1",
             "nano-banana-pro",
         ])
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
