@@ -17,11 +17,11 @@ from PyQt5.QtWidgets import (
     QScrollArea, QMessageBox, QDialog, QLineEdit, QFrame,
     QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QSizePolicy, QStackedWidget,
     QGridLayout, QSpacerItem, QMenu, QAction, QStyledItemDelegate, QStyle, QListView,
-    QSlider, QListWidget, QCheckBox, QProgressBar
+    QSlider, QListWidget, QCheckBox, QProgressBar, QBoxLayout
 )
 import re
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QPoint, QRect, QTimer, QMimeData, QEvent, QObject
-from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinearGradient, QBrush, QPen, QPainterPath
+from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinearGradient, QBrush, QPen, QPainterPath, QCursor
 
 
 APP_VERSION = "4.0"
@@ -1037,11 +1037,11 @@ QComboBox {
     background-color: $bg_input;
     border: 1px solid $border_soft;
     border-radius: 8px;
-    padding: 10px 14px;
+    padding: 8px 8px;
     font-family: "Inter", "Source Han Sans SC", "思源黑体", "Microsoft YaHei";
     font-size: 15px;
     color: $text_input;
-    min-width: 100px;
+    min-width: 32px;
     min-height: 22px;
 }
 QComboBox:hover {
@@ -1333,8 +1333,38 @@ def get_logo_path():
 
 def setup_combo(combo):
     combo.setMaxVisibleItems(20)
+    combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(4)
+    combo.setMinimumWidth(0)
+    combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
     combo.view().setMouseTracking(True)
     combo.wheelEvent = lambda e: e.ignore()
+
+
+def available_screen_geometry(widget=None):
+    """Return logical screen geometry after the operating system's DPI scaling."""
+    screen = None
+    if widget is not None:
+        try:
+            screen = widget.screen()
+        except Exception:
+            screen = None
+    if screen is None:
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+    return screen.availableGeometry() if screen is not None else QRect(0, 0, 1200, 800)
+
+
+def fit_dialog_to_screen(dialog, preferred_size, minimum_size=(360, 320), fixed=False):
+    available = available_screen_geometry(dialog.parentWidget())
+    max_width = max(320, available.width() - 32)
+    max_height = max(280, available.height() - 32)
+    width = min(preferred_size[0], max_width)
+    height = min(preferred_size[1], max_height)
+    if fixed:
+        dialog.setFixedSize(width, height)
+    else:
+        dialog.setMinimumSize(min(minimum_size[0], width), min(minimum_size[1], height))
+        dialog.resize(width, height)
 
 
 
@@ -1342,7 +1372,7 @@ class TutorialDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("如何获取 API Key")
-        self.setFixedSize(520, 520)
+        fit_dialog_to_screen(self, (520, 520), fixed=True)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setStyleSheet("""
             QDialog { background-color: #0a0e1a; }
@@ -1414,22 +1444,25 @@ class KeyDialog(QDialog):
     def __init__(self, parent=None, prefill_key="", theme=None):
         super().__init__(parent)
         self.setWindowTitle("Glacier AI")
-        self.setFixedSize(440, 460)
+        fit_dialog_to_screen(self, (440, 460), fixed=True)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setStyleSheet(build_login_style(theme or DEFAULT_THEME))
+        compact = self.height() < 440 or self.width() < 420
 
         logo_path = get_logo_path()
         if os.path.exists(logo_path):
             self.setWindowIcon(QIcon(logo_path))
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(30, 30, 30, 30)
+        outer_margin = 12 if compact else 30
+        outer.setContentsMargins(outer_margin, outer_margin, outer_margin, outer_margin)
 
         card = QFrame()
         card.setObjectName("loginCard")
         card_layout = QVBoxLayout(card)
-        card_layout.setSpacing(16)
-        card_layout.setContentsMargins(28, 32, 28, 28)
+        card_layout.setSpacing(8 if compact else 16)
+        card_margin = 16 if compact else 28
+        card_layout.setContentsMargins(card_margin, card_margin, card_margin, card_margin)
 
         title = QLabel("Glacier AI")
         title.setObjectName("loginTitle")
@@ -1437,13 +1470,15 @@ class KeyDialog(QDialog):
 
         subtitle = QLabel("New API - Image & Video Generator")
         subtitle.setObjectName("loginSubtitle")
+        subtitle.setWordWrap(True)
+        subtitle.setVisible(not compact)
         card_layout.addWidget(subtitle)
 
-        version = QLabel("VERSION 4.0")
+        version = QLabel(f"VERSION {APP_VERSION}")
         version.setObjectName("loginVersion")
         card_layout.addWidget(version)
 
-        card_layout.addSpacing(8)
+        card_layout.addSpacing(0 if compact else 8)
 
         hint = QLabel("请输入您的 API Key")
         hint.setObjectName("loginHint")
@@ -1452,7 +1487,7 @@ class KeyDialog(QDialog):
         self.key_input = QLineEdit()
         self.key_input.setObjectName("keyInput")
         self.key_input.setPlaceholderText("sk-xxxxxxxxxxxxxxxx")
-        self.key_input.setMinimumHeight(42)
+        self.key_input.setMinimumHeight(36 if compact else 42)
         self.key_input.setEchoMode(QLineEdit.Password)
         card_layout.addWidget(self.key_input)
 
@@ -1468,11 +1503,11 @@ class KeyDialog(QDialog):
         self.remember_chk.setChecked(True)
         card_layout.addWidget(self.remember_chk)
 
-        card_layout.addSpacing(4)
+        card_layout.addSpacing(0 if compact else 4)
 
         self.login_btn = QPushButton("开始使用")
         self.login_btn.setObjectName("loginBtn")
-        self.login_btn.setMinimumHeight(44)
+        self.login_btn.setMinimumHeight(38 if compact else 44)
         self.login_btn.setCursor(Qt.PointingHandCursor)
         self.login_btn.clicked.connect(self.on_login)
         card_layout.addWidget(self.login_btn)
@@ -2733,8 +2768,7 @@ class PreviewDialog(QDialog):
         self.file_ext = file_ext
         self.is_video = is_video
         self.setWindowTitle("预览")
-        self.setMinimumSize(600, 500)
-        self.resize(900, 700)
+        fit_dialog_to_screen(self, (900, 700), minimum_size=(520, 400))
         self.setStyleSheet("QDialog { background-color: #0a0e1a; }")
 
         layout = QVBoxLayout(self)
@@ -3304,7 +3338,8 @@ class SettingsDialog(QDialog):
         self.setObjectName("settingsDlg")
         self.setWindowTitle("界面设置")
         self.setStyleSheet(build_settings_dialog_style(theme))
-        self.setFixedWidth(460)
+        available_width = available_screen_geometry(parent).width()
+        self.setFixedWidth(min(460, max(340, available_width - 32)))
         self._on_change = on_change
         self._initial = (font_scale, brightness, theme, concurrency)
 
@@ -3500,6 +3535,8 @@ class MainWindow(QMainWindow):
         self._concurrency = max(1, min(5, int(ui.get("concurrency", 3))))
         self._bg_pages = []
         self._balance_thread = None
+        self._responsive_state = None
+        self._screen_signal_connected = False
         self.scheduler = TaskScheduler(self, max_concurrent=self._concurrency)
         self.scheduler.task_state_changed.connect(self._on_task_state_changed)
         self.scheduler.queue_changed.connect(self._refresh_status_bar)
@@ -3512,11 +3549,10 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Glacier AI")
-        self.setMinimumSize(1100, 750)
-        self.resize(1200, 800)
         self.setStyleSheet(build_main_style(self._theme))
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self._fit_to_screen(initial=True)
 
         logo_path = get_logo_path()
         if os.path.exists(logo_path):
@@ -3552,11 +3588,174 @@ class MainWindow(QMainWindow):
 
         body.addLayout(right_area)
         root.addLayout(body)
+        self._responsive_state = None
+        self._apply_responsive_layout()
+
+    def _fit_to_screen(self, screen=None, initial=False):
+        available = screen.availableGeometry() if screen is not None else available_screen_geometry(self)
+
+        min_width = min(available.width(), max(640, min(900, round(available.width() * 0.68))))
+        min_height = min(available.height(), max(360, min(650, round(available.height() * 0.68))))
+        self.setMinimumSize(min_width, min_height)
+
+        if initial:
+            width = min(1200, max(min_width, round(available.width() * 0.92)))
+            height = min(800, max(min_height, round(available.height() * 0.92)))
+        else:
+            width = min(self.width(), available.width())
+            height = min(self.height(), available.height())
+
+        self.resize(width, height)
+        left = available.left() + max(0, (available.width() - width) // 2)
+        top = available.top() + max(0, (available.height() - height) // 2)
+        self.move(left, top)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._screen_signal_connected and self.windowHandle() is not None:
+            self.windowHandle().screenChanged.connect(self._on_screen_changed)
+            self._screen_signal_connected = True
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_responsive_layout(event.size().width(), event.size().height())
+
+    def _on_screen_changed(self, screen):
+        QTimer.singleShot(0, lambda: self._fit_to_screen(screen=screen))
+
+    def _apply_responsive_layout(self, width=None, height=None):
+        width = width or self.width()
+        height = height or self.height()
+        compact = width < 1050 or height < 680
+        very_compact = width < 820
+        very_narrow = width < 620
+        low_height = height < 620
+        state = (compact, very_compact, very_narrow, low_height)
+        if state == self._responsive_state:
+            return
+        self._responsive_state = state
+
+        nav = getattr(self, "_side_nav", None)
+        if nav is not None:
+            nav.setFixedWidth(72 if very_compact else (164 if compact else 200))
+
+        title_sub = getattr(self, "_title_sub", None)
+        if title_sub is not None:
+            title_sub.setVisible(width >= 900)
+
+        nav_title = getattr(self, "_nav_title", None)
+        if nav_title is not None:
+            nav_title.setVisible(not very_compact)
+
+        version_label = getattr(self, "_version_label", None)
+        if version_label is not None:
+            version_label.setText(f"V{APP_VERSION}" if very_compact else f"V{APP_VERSION} Stable")
+
+        nav_bottom = getattr(self, "_nav_bottom", None)
+        if nav_bottom is not None:
+            nav_bottom.setVisible(not very_compact)
+
+        for badge in (
+            getattr(self, "_image_prompt_badge", None),
+            getattr(self, "_video_prompt_badge", None),
+        ):
+            if badge is not None:
+                badge.setVisible(not compact)
+
+        for button in (
+            getattr(self, "img_ref_pick_btn", None),
+            getattr(self, "vid_ref_pick_btn", None),
+        ):
+            if button is not None:
+                button.setText("选择图片" if compact else "选择本地图片")
+
+        nav_labels = (
+            (getattr(self, "nav_img_btn", None), "  ⚡  图片生成", "⚡", "图片生成"),
+            (getattr(self, "nav_vid_btn", None), "  🎬  视频生成", "🎬", "视频生成"),
+            (getattr(self, "nav_hist_btn", None), "  📋  历史记录", "📋", "历史记录"),
+            (getattr(self, "nav_settings_btn", None), "  ⚙  设置", "⚙", "设置"),
+            (getattr(self, "nav_update_btn", None), "  ↻  检查更新", "↻", "检查更新"),
+        )
+        for button, full_text, icon_text, tooltip in nav_labels:
+            if button is not None:
+                button.setText(icon_text if very_compact else full_text)
+                button.setToolTip(tooltip)
+
+        outer_margin = 8 if very_compact else (16 if compact else 24)
+        page_spacing = 8 if very_compact else (16 if compact else 24)
+        preview_margin = 12 if compact else 24
+        for page_layout in (
+            getattr(self, "_image_page_layout", None),
+            getattr(self, "_video_page_layout", None),
+        ):
+            if page_layout is not None:
+                page_layout.setDirection(
+                    QBoxLayout.TopToBottom if very_narrow else QBoxLayout.LeftToRight
+                )
+                page_layout.setContentsMargins(outer_margin, outer_margin, outer_margin, 0)
+                page_layout.setSpacing(page_spacing)
+        for preview_layout in (
+            getattr(self, "_image_preview_layout", None),
+            getattr(self, "_video_preview_layout", None),
+        ):
+            if preview_layout is not None:
+                preview_layout.setContentsMargins(preview_margin, preview_margin, preview_margin, preview_margin)
+
+        prompt_min = 80 if low_height else (96 if compact else 120)
+        prompt_max = 120 if low_height else (140 if compact else 160)
+        for prompt in (
+            getattr(self, "prompt_input", None),
+            getattr(self, "video_prompt_input", None),
+        ):
+            if prompt is not None:
+                prompt.setMinimumHeight(prompt_min)
+                prompt.setMaximumHeight(prompt_max)
+
+        button_height = 44 if low_height else (48 if compact else 56)
+        for button in (getattr(self, "gen_btn", None), getattr(self, "video_gen_btn", None)):
+            if button is not None:
+                button.setMinimumHeight(button_height)
+
+        footer = getattr(self, "_footer", None)
+        if footer is not None:
+            footer.setFixedHeight(36 if compact else 42)
+        footer_layout = getattr(self, "_footer_layout", None)
+        if footer_layout is not None:
+            footer_layout.setContentsMargins(10 if compact else 20, 0, 10 if compact else 20, 0)
+        footer_brand = getattr(self, "_footer_brand", None)
+        if footer_brand is not None:
+            footer_brand.setVisible(not very_compact)
+        for status_bar in (
+            getattr(self, "img_status_bar", None),
+            getattr(self, "vid_status_bar", None),
+        ):
+            if status_bar is not None:
+                status_bar.setVisible(not compact)
+
+        thumb_size = 76 if very_compact else (90 if compact else 110)
+        for tag in ("start", "end"):
+            thumb = getattr(self, f"_vid_{tag}_frame_thumb", None)
+            clear_button = getattr(self, f"_vid_{tag}_frame_clear", None)
+            if thumb is not None:
+                thumb.setFixedSize(thumb_size, thumb_size)
+            if clear_button is not None:
+                clear_button.setFixedSize(thumb_size, 20)
+        keyframe_row = getattr(self, "_keyframe_slots_row", None)
+        if keyframe_row is not None:
+            keyframe_row.setSpacing(8 if very_compact else (10 if compact else 12))
+        keyframe_layout = getattr(self, "_keyframe_layout", None)
+        if keyframe_layout is not None:
+            margin = 12 if very_compact else (16 if compact else 20)
+            keyframe_layout.setContentsMargins(margin, margin, margin, margin)
+        progress = getattr(self, "update_progress", None)
+        if progress is not None:
+            progress.setFixedWidth(100 if very_compact else (140 if compact else 180))
 
     def _build_title_bar(self, parent_layout):
         bar = QFrame()
         bar.setObjectName("titleBar")
         bar.setFixedHeight(40)
+        self._title_bar = bar
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(16, 0, 0, 0)
         layout.setSpacing(0)
@@ -3574,6 +3773,7 @@ class MainWindow(QMainWindow):
 
         sub = QLabel("New API - 图片视频生成器")
         sub.setObjectName("titleSub")
+        self._title_sub = sub
         layout.addWidget(sub)
 
         layout.addStretch()
@@ -3625,6 +3825,7 @@ class MainWindow(QMainWindow):
         nav = QFrame()
         nav.setObjectName("sideNav")
         nav.setFixedWidth(200)
+        self._side_nav = nav
         nav_layout = QVBoxLayout(nav)
         nav_layout.setContentsMargins(0, 0, 0, 0)
         nav_layout.setSpacing(0)
@@ -3635,6 +3836,7 @@ class MainWindow(QMainWindow):
         header_layout.setSpacing(2)
         title = QLabel("GLACIER ENGINE")
         title.setObjectName("navTitle")
+        self._nav_title = title
         header_layout.addWidget(title)
         ver = QLabel(f"V{APP_VERSION} Stable")
         ver.setObjectName("navVersion")
@@ -3678,6 +3880,7 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self.nav_update_btn)
 
         bottom = QWidget()
+        self._nav_bottom = bottom
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(16, 12, 16, 16)
         bottom_layout.setSpacing(6)
@@ -4070,6 +4273,7 @@ class MainWindow(QMainWindow):
         page.setStyleSheet(f"background-color: {get_theme(self._theme)['bg_main']};")
         self._bg_pages.append(page)
         layout = QHBoxLayout(page)
+        self._image_page_layout = layout
         layout.setSpacing(24)
         layout.setContentsMargins(24, 24, 24, 0)
 
@@ -4095,6 +4299,7 @@ class MainWindow(QMainWindow):
         ph.addStretch()
         badge = QLabel("ENHANCED")
         badge.setObjectName("sectionBadge")
+        self._image_prompt_badge = badge
         ph.addWidget(badge)
         pc_layout.addLayout(ph)
 
@@ -4258,6 +4463,7 @@ class MainWindow(QMainWindow):
         preview = QFrame()
         preview.setObjectName("previewArea")
         preview_layout = QVBoxLayout(preview)
+        self._image_preview_layout = preview_layout
         preview_layout.setContentsMargins(24, 24, 24, 24)
 
         self.img_placeholder = QWidget()
@@ -4321,6 +4527,7 @@ class MainWindow(QMainWindow):
         page.setStyleSheet(f"background-color: {get_theme(self._theme)['bg_main']};")
         self._bg_pages.append(page)
         layout = QHBoxLayout(page)
+        self._video_page_layout = layout
         layout.setSpacing(24)
         layout.setContentsMargins(24, 24, 24, 0)
 
@@ -4346,6 +4553,7 @@ class MainWindow(QMainWindow):
         ph.addStretch()
         badge = QLabel("VIDEO")
         badge.setObjectName("sectionBadge")
+        self._video_prompt_badge = badge
         ph.addWidget(badge)
         pc_layout.addLayout(ph)
 
@@ -4482,6 +4690,7 @@ class MainWindow(QMainWindow):
         self.vid_keyframe_card = QFrame()
         self.vid_keyframe_card.setObjectName("glassPanel")
         kf_layout = QVBoxLayout(self.vid_keyframe_card)
+        self._keyframe_layout = kf_layout
         kf_layout.setSpacing(10)
         kf_layout.setContentsMargins(20, 20, 20, 20)
 
@@ -4495,6 +4704,7 @@ class MainWindow(QMainWindow):
         kf_layout.addWidget(kf_hint)
 
         kf_slots_row = QHBoxLayout()
+        self._keyframe_slots_row = kf_slots_row
         kf_slots_row.setSpacing(12)
 
         self._vid_start_frame = {"url": None, "bytes": None, "uploading": False}
@@ -4519,6 +4729,7 @@ class MainWindow(QMainWindow):
             clear_btn.setCursor(Qt.PointingHandCursor)
             clear_btn.setStyleSheet("background: rgba(255,107,107,0.2); color: #ff6b6b; border: none; border-radius: 3px; font-size: 10px;")
             clear_btn.clicked.connect(lambda checked, t=tag: self.on_clear_keyframe(t))
+            setattr(self, f"_vid_{tag}_frame_clear", clear_btn)
             slot_col.addWidget(clear_btn, alignment=Qt.AlignCenter)
             kf_slots_row.addLayout(slot_col)
         kf_slots_row.addStretch()
@@ -4616,6 +4827,7 @@ class MainWindow(QMainWindow):
         preview = QFrame()
         preview.setObjectName("previewArea")
         preview_layout = QVBoxLayout(preview)
+        self._video_preview_layout = preview_layout
         preview_layout.setContentsMargins(24, 24, 24, 24)
 
         self.video_status_label = QLabel()
@@ -4684,7 +4896,9 @@ class MainWindow(QMainWindow):
         footer = QFrame()
         footer.setObjectName("footerBar")
         footer.setFixedHeight(42)
+        self._footer = footer
         fl = QHBoxLayout(footer)
+        self._footer_layout = fl
         fl.setContentsMargins(20, 0, 20, 0)
         fl.setSpacing(10)
 
@@ -4710,8 +4924,9 @@ class MainWindow(QMainWindow):
 
         fl.addStretch()
 
-        brand = QLabel("GLACIER-OS CORE V3.4")
+        brand = QLabel(f"GLACIER-OS CORE V{APP_VERSION}")
         brand.setObjectName("footerBrand")
+        self._footer_brand = brand
         fl.addWidget(brand)
 
         parent_layout.addWidget(footer)
@@ -5266,10 +5481,13 @@ class MainWindow(QMainWindow):
         if img_bytes:
             qimg = QImage.fromData(img_bytes)
             if not qimg.isNull():
-                pm = QPixmap.fromImage(qimg).scaled(110, 110, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-                x = max(0, (pm.width() - 110) // 2)
-                y = max(0, (pm.height() - 110) // 2)
-                thumb.setPixmap(pm.copy(x, y, 110, 110))
+                thumb_size = max(1, min(thumb.width(), thumb.height()))
+                pm = QPixmap.fromImage(qimg).scaled(
+                    thumb_size, thumb_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+                )
+                x = max(0, (pm.width() - thumb_size) // 2)
+                y = max(0, (pm.height() - thumb_size) // 2)
+                thumb.setPixmap(pm.copy(x, y, thumb_size, thumb_size))
                 thumb.setText("")
                 return
         thumb.setText("点击选择")
@@ -6104,6 +6322,12 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    if hasattr(Qt, "HighDpiScaleFactorRoundingPolicy"):
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 9))
