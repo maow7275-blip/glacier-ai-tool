@@ -24,7 +24,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QPoint, QRect, QTimer, 
 from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinearGradient, QBrush, QPen, QPainterPath, QCursor
 
 
-APP_VERSION = "4.0"
+APP_VERSION = "4.1"
 UPDATE_MANIFEST_URLS = (
     "https://www.updateglacieraiw.com/update.json",
     "https://raw.githubusercontent.com/maow7275-blip/glacier-ai-tool/main/update.json",
@@ -383,6 +383,8 @@ QUALITY_TO_API = {"1k": "low", "2k": "medium", "4k": "high"}
 
 VIDEO_SIZES = {"横屏": "landscape", "竖屏": "portrait"}
 VIDEO_DURATIONS = ["4", "8", "12"]
+VIDEO_POLL_INTERVAL_SECONDS = 10
+VIDEO_GENERATION_TIMEOUT_SECONDS = 2 * 60 * 60
 
 
 def extract_video_first_frame_bytes(video_bytes_or_path):
@@ -456,121 +458,87 @@ def get_or_make_thumb_for_video(video_path):
         return None
 
 # 当前 API 可用的视频模型分组。模型名称与 /api/pricing 保持一致。
-VIDEO_MODELS = ["sd-2 ▸", "sd-2.5 ▸", "video-2.5", "minimax-h3"]
+VIDEO_MODELS = ["sd-2 ▸", "sd-2.5 ▸", "wan-3.0 ▸", "minimax-h3"]
 VIDEO_MODEL_GROUPS = {
     "sd-2 ▸": [
         "sd-2-fast-480", "sd-2-fast-720",
-        "sd-2-mini-480", "sd-2-mini-720",
         "sd-2-vip-480", "sd-2-vip-720",
     ],
     "sd-2.5 ▸": ["sd-2.5-480", "sd-2.5-720", "sd-2.5-1080"],
+    "wan-3.0 ▸": ["wan-3.0-480", "wan-3.0-720"],
 }
-# 仅保留暂未开放的模型；这些模型不会出现在默认下拉框中。
-VIDEO_MODELS_HIDDEN = ["sora-2", "kling-o3"]
+# 价格接口未开放额外的视频模型。
+VIDEO_MODELS_HIDDEN = []
 VIDEO_MODEL_DURATIONS = {
-    "sora-2": ["4", "8", "12"],
-    "sd-2.0": [str(i) for i in range(4, 16)],
-    "sd-2.0-mini": [str(i) for i in range(4, 16)],
-    "sd-2.0-480": [str(i) for i in range(4, 16)],
-    "sd-2.0-fast": [str(i) for i in range(4, 16)],
-    "sd-2.0-fast-480": [str(i) for i in range(4, 16)],
+    "sd-2-fast-480": [str(i) for i in range(5, 16)],
+    "sd-2-fast-720": [str(i) for i in range(5, 16)],
+    "sd-2-vip-480": [str(i) for i in range(5, 16)],
+    "sd-2-vip-720": [str(i) for i in range(5, 16)],
     "sd-2.5-480": [str(i) for i in range(4, 31)],
     "sd-2.5-720": [str(i) for i in range(4, 31)],
     "sd-2.5-1080": [str(i) for i in range(4, 31)],
-    "sd-2-fast-480": [str(i) for i in range(5, 16)],
-    "sd-2-fast-720": [str(i) for i in range(5, 16)],
-    "sd-2-mini-480": [str(i) for i in range(5, 16)],
-    "sd-2-mini-720": [str(i) for i in range(5, 16)],
-    "sd-2-vip-480": [str(i) for i in range(5, 16)],
-    "sd-2-vip-720": [str(i) for i in range(5, 16)],
-    "video-2.5": [str(i) for i in range(4, 13)],
-    "kling-o3": [str(i) for i in range(5, 16)],
+    "wan-3.0-480": [str(i) for i in range(2, 31)],
+    "wan-3.0-720": [str(i) for i in range(2, 31)],
     "minimax-h3": [str(i) for i in range(5, 16)],
-    "grok-imagine-video-1.5": ["6", "10", "15"],
-    "sd-2": [str(i) for i in range(5, 11)],
-    "sd-2-fast": [str(i) for i in range(5, 11)],
-    "sd-2-vip": [str(i) for i in range(5, 16)],
-    "sd-2-vip-720": [str(i) for i in range(5, 16)],
-    "sd-2-mini-480": [str(i) for i in range(5, 16)],
-    "sd-2-mini-720": [str(i) for i in range(5, 16)],
 }
-VIDEO_PROMPT_LIMIT = {"sd-2.0": 3500, "sd-2.0-mini": 3500, "sd-2.0-480": 3500, "sd-2.0-fast": 5000, "sd-2.0-fast-480": 5000, "kling-o3": 5000,
-                      "minimax-h3": 10000, "video-2.5": 10000, "sd-2": 5000, "sd-2-fast": 10000, "sd-2-vip": 10000, "sd-2-vip-720": 10000, "sd-2-mini-480": 10000, "sd-2-mini-720": 10000,
-                      "sd-2-fast-720": 10000, "sd-2-vip-480": 10000, "sd-2.5-480": 10000, "sd-2.5-720": 10000, "sd-2.5-1080": 10000, "grok-imagine-video-1.5": 4000}
+VIDEO_PROMPT_LIMIT = {
+    "sd-2-fast-480": 10000, "sd-2-fast-720": 10000,
+    "sd-2-vip-480": 10000, "sd-2-vip-720": 10000,
+    "sd-2.5-480": 10000, "sd-2.5-720": 10000, "sd-2.5-1080": 10000,
+    "wan-3.0-480": 5000, "wan-3.0-720": 5000,
+    "minimax-h3": 10000,
+}
 VIDEO_MODEL_ORIENTATIONS = {
-    "sora-2": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2.0": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2.0-mini": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2.0-480": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2.0-fast": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2.0-fast-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-fast-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-fast-720": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-vip-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "sd-2-vip-720": {"横屏": "landscape", "竖屏": "portrait"},
     "sd-2.5-480": {"横屏": "landscape", "竖屏": "portrait"},
     "sd-2.5-720": {"横屏": "landscape", "竖屏": "portrait"},
     "sd-2.5-1080": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-fast-480": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-fast-720": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-mini-480": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-mini-720": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-vip-480": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-vip-720": {"横屏": "landscape", "竖屏": "portrait"},
-    "video-2.5": {"横屏": "landscape", "竖屏": "portrait"},
-    "kling-o3": {"横屏": "landscape", "竖屏": "portrait", "方屏": "square"},
+    "wan-3.0-480": {"横屏": "landscape", "竖屏": "portrait"},
+    "wan-3.0-720": {"横屏": "landscape", "竖屏": "portrait"},
     "minimax-h3": {"横屏": "landscape", "竖屏": "portrait"},
-    "grok-imagine-video-1.5": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-fast": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-vip": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-vip-720": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-mini-480": {"横屏": "landscape", "竖屏": "portrait"},
-    "sd-2-mini-720": {"横屏": "landscape", "竖屏": "portrait"},
 }
 VIDEO_MODEL_RATIOS = {
-    "sd-2.0": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
-    "sd-2.0-mini": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
-    "sd-2.0-480": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
-    "sd-2.0-fast": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
-    "sd-2.0-fast-480": ["9:16", "16:9", "1:1", "21:9", "4:3", "3:4"],
-    "sd-2.5-480": ["16:9", "4:3", "1:1", "3:4", "9:16"],
-    "sd-2.5-720": ["16:9", "4:3", "1:1", "3:4", "9:16"],
-    "sd-2.5-1080": ["9:16", "3:4", "1:1", "4:3", "16:9"],
     "sd-2-fast-480": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
     "sd-2-fast-720": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
-    "sd-2-mini-480": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
-    "sd-2-mini-720": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
     "sd-2-vip-480": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
     "sd-2-vip-720": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
-    "video-2.5": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
-    "grok-imagine-video-1.5": ["16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
-    "minimax-h3": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
-    "sd-2": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
-    "sd-2-fast": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
-    "sd-2-vip": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
-    "sd-2-vip-720": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
-    "sd-2-mini-480": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
-    "sd-2-mini-720": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+    "sd-2.5-480": ["9:16", "3:4", "1:1", "4:3", "16:9"],
+    "sd-2.5-720": ["9:16", "3:4", "1:1", "4:3", "16:9"],
+    "sd-2.5-1080": ["9:16", "3:4", "1:1", "4:3", "16:9"],
+    "wan-3.0-480": ["9:16", "16:9", "1:1", "3:4", "4:3"],
+    "wan-3.0-720": ["9:16", "16:9", "1:1", "3:4", "4:3"],
 }
-VIDEO_MODEL_MAX_IMAGES_BASE = {"sora-2": 1, "sd-2.0": 4, "sd-2.0-mini": 4, "sd-2.0-480": 4, "sd-2.0-fast": 4, "sd-2.0-fast-480": 4,
-                                "sd-2.5-480": 30, "sd-2.5-720": 30, "sd-2.5-1080": 30, "kling-o3": 8, "minimax-h3": 9, "video-2.5": 5, "grok-imagine-video-1.5": 7, "sd-2": 9, "sd-2-fast": 9, "sd-2-fast-480": 9, "sd-2-fast-720": 9, "sd-2-vip": 9, "sd-2-vip-480": 9, "sd-2-vip-720": 9, "sd-2-mini-480": 9, "sd-2-mini-720": 9}
-VIDEO_MODEL_MAX_IMAGES_WITH_VIDEO = {"sora-2": 1, "sd-2.0": 4, "sd-2.0-mini": 4, "sd-2.0-480": 4, "sd-2.0-fast": 4, "sd-2.0-fast-480": 4,
-                                      "sd-2.5-480": 30, "sd-2.5-720": 30, "sd-2.5-1080": 30, "kling-o3": 8, "minimax-h3": 9, "video-2.5": 5, "grok-imagine-video-1.5": 7, "sd-2": 9, "sd-2-fast": 9, "sd-2-fast-480": 9, "sd-2-fast-720": 9, "sd-2-vip": 9, "sd-2-vip-480": 9, "sd-2-vip-720": 9, "sd-2-mini-480": 9, "sd-2-mini-720": 9}
-VIDEO_MODEL_MAX_VIDEOS = {"sora-2": 0, "sd-2.0": 3, "sd-2.0-mini": 3, "sd-2.0-480": 3, "sd-2.0-fast": 3, "sd-2.0-fast-480": 3,
-                          "sd-2.5-480": 10, "sd-2.5-720": 10, "sd-2.5-1080": 10, "kling-o3": 0, "minimax-h3": 0, "video-2.5": 1, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-fast-480": 3, "sd-2-fast-720": 3, "sd-2-vip": 3, "sd-2-vip-480": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
-VIDEO_MODEL_MAX_AUDIOS = {"sora-2": 0, "sd-2.0": 1, "sd-2.0-mini": 1, "sd-2.0-480": 1, "sd-2.0-fast": 1, "sd-2.0-fast-480": 1,
-                          "sd-2.5-480": 10, "sd-2.5-720": 10, "sd-2.5-1080": 10, "kling-o3": 0, "minimax-h3": 3, "video-2.5": 3, "grok-imagine-video-1.5": 0, "sd-2": 3, "sd-2-fast": 3, "sd-2-fast-480": 3, "sd-2-fast-720": 3, "sd-2-vip": 3, "sd-2-vip-480": 3, "sd-2-vip-720": 3, "sd-2-mini-480": 3, "sd-2-mini-720": 3}
+VIDEO_MODEL_MAX_IMAGES_BASE = {
+    "sd-2-fast-480": 9, "sd-2-fast-720": 9,
+    "sd-2-vip-480": 9, "sd-2-vip-720": 9,
+    "sd-2.5-480": 30, "sd-2.5-720": 30, "sd-2.5-1080": 30,
+    "wan-3.0-480": 10, "wan-3.0-720": 10,
+    "minimax-h3": 9,
+}
+VIDEO_MODEL_MAX_IMAGES_WITH_VIDEO = dict(VIDEO_MODEL_MAX_IMAGES_BASE)
+VIDEO_MODEL_MAX_VIDEOS = {
+    "sd-2-fast-480": 3, "sd-2-fast-720": 3,
+    "sd-2-vip-480": 3, "sd-2-vip-720": 3,
+    "sd-2.5-480": 10, "sd-2.5-720": 10, "sd-2.5-1080": 10,
+    "wan-3.0-480": 0, "wan-3.0-720": 0,
+    "minimax-h3": 0,
+}
+VIDEO_MODEL_MAX_AUDIOS = {
+    "sd-2-fast-480": 3, "sd-2-fast-720": 3,
+    "sd-2-vip-480": 3, "sd-2-vip-720": 3,
+    "sd-2.5-480": 10, "sd-2.5-720": 10, "sd-2.5-1080": 10,
+    "wan-3.0-480": 5, "wan-3.0-720": 5,
+    "minimax-h3": 3,
+}
 VIDEO_MODEL_MAX_IMAGE_TOTAL_BYTES = {
-    "sd-2.0": 30 * 1024 * 1024,
-    "sd-2.0-mini": 30 * 1024 * 1024,
-    "sd-2.0-480": 30 * 1024 * 1024,
-    "sd-2.0-fast": 30 * 1024 * 1024,
-    "sd-2.0-fast-480": 30 * 1024 * 1024,
-    "sd-2-mini-480": 30 * 1024 * 1024,
-    "sd-2-mini-720": 30 * 1024 * 1024,
-    "sd-2-vip-480": 30 * 1024 * 1024,
-    "sd-2-vip-720": 30 * 1024 * 1024,
     "sd-2.5-480": 30 * 1024 * 1024,
     "sd-2.5-720": 30 * 1024 * 1024,
     "sd-2.5-1080": 30 * 1024 * 1024,
-    "video-2.5": 30 * 1024 * 1024,
+    "wan-3.0-480": 25 * 1024 * 1024,
+    "wan-3.0-720": 25 * 1024 * 1024,
 }
 
 
@@ -2048,7 +2016,7 @@ class VideoGenerateThread(QThread):
     error = pyqtSignal(int, str)
     all_done = pyqtSignal()
 
-    def __init__(self, api_key, prompt, size, duration, count=1, image_url=None, model="sora-2", video_refs=None, audio_refs=None, sd_size=None, sd_ratio=None, start_image_url=None, end_image_url=None):
+    def __init__(self, api_key, prompt, size, duration, count=1, image_url=None, model="sd-2-fast-480", video_refs=None, audio_refs=None, sd_size=None, sd_ratio=None, start_image_url=None, end_image_url=None):
         super().__init__()
         self.api_key = api_key
         self.prompt = prompt
@@ -2076,11 +2044,8 @@ class VideoGenerateThread(QThread):
             "duration": int(self.duration),
             "watermark": False,
         }
-        if not self.model.startswith("sd-2.0"):
-            payload["orientation"] = self.size
-        if self.model == "sora-2":
-            payload["size"] = "1080p"
-        elif self.sd_size:
+        payload["orientation"] = self.size
+        if self.sd_size:
             payload["size"] = self.sd_size
         if self.sd_ratio:
             payload["ratio"] = self.sd_ratio
@@ -2142,15 +2107,20 @@ class VideoGenerateThread(QThread):
         self.progress.emit(f"第{index+1}个视频: 任务已提交，等待生成...")
         query_url = f"https://www.hfsyapi.cn/v1/video/query?id={task_id}"
 
-        for i in range(360):
-            time.sleep(5)
+        poll_started = time.monotonic()
+        poll_deadline = poll_started + VIDEO_GENERATION_TIMEOUT_SECONDS
+        poll_count = 0
+        while time.monotonic() < poll_deadline:
+            remaining = poll_deadline - time.monotonic()
+            time.sleep(min(VIDEO_POLL_INTERVAL_SECONDS, max(0, remaining)))
+            poll_count += 1
             try:
                 poll_resp = requests.get(query_url, headers=headers, timeout=(10, 30))
             except Exception as e:
-                _log("POLL_ERR", f"i={i}, err={e}")
+                _log("POLL_ERR", f"i={poll_count - 1}, err={e}")
                 continue
             if poll_resp.status_code != 200:
-                _log("POLL_HTTP", f"i={i}, status={poll_resp.status_code}, body={poll_resp.text[:300]}")
+                _log("POLL_HTTP", f"i={poll_count - 1}, status={poll_resp.status_code}, body={poll_resp.text[:300]}")
                 if poll_resp.status_code == 429:
                     try:
                         extra = max(0, int(poll_resp.headers.get("Retry-After", "0")))
@@ -2162,7 +2132,7 @@ class VideoGenerateThread(QThread):
             try:
                 poll_data = poll_resp.json()
             except Exception as e:
-                _log("POLL_JSON_ERR", f"i={i}, err={e}, body={poll_resp.text[:300]}")
+                _log("POLL_JSON_ERR", f"i={poll_count - 1}, err={e}, body={poll_resp.text[:300]}")
                 continue
 
             inner = poll_data.get("data") if isinstance(poll_data.get("data"), dict) else {}
@@ -2178,7 +2148,8 @@ class VideoGenerateThread(QThread):
                     _log("NO_URL", f"poll_data={json.dumps(poll_data, ensure_ascii=False)[:600]}")
                     self.error.emit(index, f"第{index+1}个任务完成但未返回视频地址")
                     return
-                _log("COMPLETED", f"poll_iter={i}, elapsed={(i+1)*5}s, url={video_url[:120]}")
+                elapsed = int(time.monotonic() - poll_started)
+                _log("COMPLETED", f"poll_iter={poll_count - 1}, elapsed={elapsed}s, url={video_url[:120]}")
                 self.progress.emit(f"第{index+1}个视频: 正在下载...")
                 dl_start = time.time()
                 vid_resp = requests.get(video_url, timeout=(15, 300))
@@ -2193,7 +2164,8 @@ class VideoGenerateThread(QThread):
                 err_msg = inner.get("error") or inner.get("message") or poll_data.get("message") or "未知错误"
                 self.error.emit(index, f"第{index+1}个视频生成失败: {err_msg}")
                 return
-            self.progress.emit(f"第{index+1}个视频: 生成中... ({(i+1) * 5}s, {progress_pct}%, {status or 'pending'})")
+            elapsed = int(time.monotonic() - poll_started)
+            self.progress.emit(f"第{index+1}个视频: 生成中... ({elapsed}s, {progress_pct}%, {status or 'pending'})")
 
         self.error.emit(index, f"第{index+1}个视频生成超时")
 
@@ -5212,7 +5184,6 @@ class MainWindow(QMainWindow):
         thumb_size = 90
         model = self.video_model_combo.currentText()
         is_sd = model.startswith("sd-2")
-        is_sd_20 = model.startswith("sd-2.0")
         for i, slot in enumerate(self._vid_img_ref_data_list):
             img_bytes = slot.get("bytes")
             uploading = slot.get("uploading")
@@ -5318,7 +5289,6 @@ class MainWindow(QMainWindow):
             w = self.vid_audio_ref_list_layout.takeAt(0).widget()
             if w:
                 w.deleteLater()
-        is_sd_20 = self.video_model_combo.currentText().startswith("sd-2.0")
         reference_offset = len(self._vid_img_ref_data_list) + len(self._vid_video_ref_url_list)
         for i, url in enumerate(self._vid_audio_ref_url_list):
             row = QWidget()
@@ -5326,8 +5296,8 @@ class MainWindow(QMainWindow):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(6)
-            ref_token = f"@{reference_offset + i + 1}" if is_sd_20 else f"@声音{i+1}"
-            tag = QLabel(ref_token if is_sd_20 else f"@声音{i+1}")
+            ref_token = f"@声音{i+1}"
+            tag = QLabel(ref_token)
             tag.setStyleSheet("color: " + get_theme(self._theme)['accent'] + "; font-size: 11px; min-width: 50px; background: transparent;")
             rl.addWidget(tag)
             url_lbl = QLabel(url)
@@ -5358,7 +5328,6 @@ class MainWindow(QMainWindow):
             w = self.vid_video_ref_list_layout.takeAt(0).widget()
             if w:
                 w.deleteLater()
-        is_sd_20 = self.video_model_combo.currentText().startswith("sd-2.0")
         reference_offset = len(self._vid_img_ref_data_list)
         for i, url in enumerate(self._vid_video_ref_url_list):
             row = QWidget()
@@ -5366,8 +5335,8 @@ class MainWindow(QMainWindow):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(6)
-            ref_token = f"@{reference_offset + i + 1}" if is_sd_20 else f"@视频{i+1}"
-            tag = QLabel(ref_token if is_sd_20 else f"@视频{i+1}")
+            ref_token = f"@视频{i+1}"
+            tag = QLabel(ref_token)
             tag.setStyleSheet("color: " + get_theme(self._theme)['accent'] + "; font-size: 11px; min-width: 50px; background: transparent;")
             rl.addWidget(tag)
             url_lbl = QLabel(url)
@@ -5400,15 +5369,6 @@ class MainWindow(QMainWindow):
 
     def _mention_candidates(self):
         model = self.video_model_combo.currentText() if hasattr(self, "video_model_combo") else ""
-        if model == "sora-2":
-            return []
-        if model.startswith("sd-2.0"):
-            total = (
-                sum(1 for s in self._vid_img_ref_data_list if s.get("url")) +
-                len(self._vid_video_ref_url_list) +
-                len(self._vid_audio_ref_url_list)
-            )
-            return [str(i) for i in range(1, total + 1)]
         cands = []
         n_imgs = sum(1 for s in self._vid_img_ref_data_list if s.get("url"))
         for i in range(1, n_imgs + 1):
@@ -5513,23 +5473,15 @@ class MainWindow(QMainWindow):
             self.video_size_combo.setCurrentText(prev_orient)
 
         is_sd = model.startswith("sd-2")
-        is_kling = model == "kling-o3"
         is_minimax = model == "minimax-h3"
-        is_grok = model == "grok-imagine-video-1.5"
 
-        is_sd_new = model in ("sd-2.0", "sd-2.0-mini", "sd-2.0-480", "sd-2.0-fast", "sd-2.0-fast-480")
         is_sd_25 = model in ("sd-2.5-480", "sd-2.5-720", "sd-2.5-1080")
-        is_video_25 = model == "video-2.5"
+        is_wan = model in ("wan-3.0-480", "wan-3.0-720")
 
         if is_sd_25:
             self.vid_video_ref_card.setVisible(True)
             self.vid_video_ref_title.setText("参考视频（可选）")
-            self.vid_video_ref_hint.setText("提示：最多 10 条，分辨率 480p-720p，单段 2-30s、≤200MB，总时长 ≤30s，必须公网 URL")
-            self.vid_audio_ref_card.setVisible(True)
-        elif is_sd_new:
-            self.vid_video_ref_card.setVisible(True)
-            self.vid_video_ref_title.setText("参考视频（可选）")
-            self.vid_video_ref_hint.setText("提示：最多 3 条，分辨率 720p–2160p，单段 3–10s、≤200MB，总时长 ≤15s；prompt 用 @1 @2... 引用")
+            self.vid_video_ref_hint.setText("提示：最多 10 条，分辨率 480p-1080p，单段 2-30s、≤200MB，总时长 ≤30s，必须公网 URL")
             self.vid_audio_ref_card.setVisible(True)
         elif is_sd:
             self.vid_video_ref_card.setVisible(True)
@@ -5539,20 +5491,15 @@ class MainWindow(QMainWindow):
         elif is_minimax:
             self.vid_video_ref_card.setVisible(False)
             self.vid_audio_ref_card.setVisible(True)
-        elif is_video_25:
-            self.vid_video_ref_card.setVisible(True)
-            self.vid_video_ref_title.setText("参考视频（可选）")
-            self.vid_video_ref_hint.setText("提示：最多 1 条，单段 4–12s，必须公网 URL")
-            self.vid_audio_ref_card.setVisible(True)
-        elif is_grok:
+        elif is_wan:
             self.vid_video_ref_card.setVisible(False)
-            self.vid_audio_ref_card.setVisible(False)
+            self.vid_audio_ref_card.setVisible(True)
         else:
             self.vid_video_ref_card.setVisible(False)
             self.vid_audio_ref_card.setVisible(False)
 
-        self.vid_size_label.setVisible(is_sd or is_kling or is_grok)
-        self.vid_size_combo.setVisible(is_sd or is_kling or is_grok)
+        self.vid_size_label.setVisible(is_sd)
+        self.vid_size_combo.setVisible(is_sd)
         self.vid_keyframe_card.setVisible(False)
 
         ratios = VIDEO_MODEL_RATIOS.get(model)
@@ -5568,34 +5515,23 @@ class MainWindow(QMainWindow):
             self.vid_ratio_label.setVisible(False)
             self.vid_ratio_combo.setVisible(False)
 
-        if model == "sora-2":
-            self.vid_img_ref_hint.setText("提示：sora-2 仅支持 1 张参考图片")
-        elif model == "grok-imagine-video-1.5":
-            self.vid_img_ref_hint.setText("提示：需要 2-7 张参考图片，不支持视频/音频，prompt 中用 @image1/@image2 引用")
-        elif model == "minimax-h3":
-            self.vid_img_ref_hint.setText("提示：最多 5 张，单图 ≤30MB；prompt 中可用 @1 @2... 引用")
+        if model == "minimax-h3":
+            self.vid_img_ref_hint.setText("提示：最多 9 张参考图片；prompt 中可用 @1 @2... 引用")
         elif is_sd_25:
-            self.vid_img_ref_hint.setText("提示：最多 30 张，单图 ≤30MB，所有素材总 ≤64MB；prompt 中可用 @1 @2... 引用")
-        elif is_sd_new:
-            self.vid_img_ref_hint.setText("提示：最多 4 张，总大小 ≤30MB，建议单张 ≤20MB；prompt 用 @1 @2... 引用")
+            self.vid_img_ref_hint.setText("提示：最多 30 张，所有参考图总大小 ≤30MB，建议单张 ≤20MB；prompt 中可用 @1 @2... 引用")
+        elif is_wan:
+            self.vid_img_ref_hint.setText("提示：最多 10 张参考图片，所有参考图总大小 ≤25MB，建议单张 ≤20MB")
         elif is_sd:
             self.vid_img_ref_hint.setText("提示：最多 9 张，单图 ≤30MB，所有素材总 ≤64MB；prompt 中可用 @1 @2... 引用")
-        elif is_kling:
-            self.vid_img_ref_hint.setText("提示：最多 8 张参考图片，不支持视频/音频")
-        elif is_video_25:
-            self.vid_img_ref_hint.setText("提示：最多 5 张参考图片，单图 ≤20MB；prompt 中可用 @图片1 @图片2... 引用")
-
         # 更新音频提示
         if is_sd_25:
             self.vid_audio_ref_hint.setText("提示：最多 10 条，单条 2-30s、≤15MB，总时长 ≤30s，必须公网 URL；prompt 中可用 @声音1 @声音2... 引用")
-        elif is_sd_new:
-            self.vid_audio_ref_hint.setText("提示：最多 1 条，单条 ≤15MB、时长 3–10s，必须公网 URL；prompt 用连续编号引用")
         elif is_sd:
             self.vid_audio_ref_hint.setText("提示：最多 3 条，单条 ≤15MB，总时长 ≤15s，必须公网 URL；prompt 中可用 @声音1 @声音2... 引用")
+        elif is_wan:
+            self.vid_audio_ref_hint.setText("提示：最多 5 条参考音频；prompt 中可用 @声音1 @声音2... 引用")
         elif is_minimax:
-            self.vid_audio_ref_hint.setText("提示：最多 1 条，单条 ≤15MB，必须公网 URL；prompt 中可用 @声音1 引用")
-        elif is_video_25:
-            self.vid_audio_ref_hint.setText("提示：最多 3 条，单条 ≤15MB，必须公网 URL；prompt 中可用 @声音1 @声音2... 引用")
+            self.vid_audio_ref_hint.setText("提示：最多 3 条参考音频；prompt 中可用 @声音1 @声音2... 引用")
 
         max_imgs = self._current_max_images()
         max_vids = self._current_max_videos()
@@ -5788,14 +5724,10 @@ class MainWindow(QMainWindow):
         if max_image_total_bytes:
             image_total_bytes = sum(int(s.get("size", 0) or 0) for s in self._vid_img_ref_data_list)
             if image_total_bytes > max_image_total_bytes:
-                QMessageBox.warning(self, "提示", f"{model} 的参考图总大小不能超过 30MB")
+                max_total_mb = max_image_total_bytes // (1024 * 1024)
+                QMessageBox.warning(self, "提示", f"{model} 的参考图总大小不能超过 {max_total_mb}MB")
                 return
-        is_kling = model == "kling-o3"
-        is_grok = model == "grok-imagine-video-1.5"
-        if is_grok and 0 < len(vid_img_urls) < 2:
-            QMessageBox.warning(self, "提示", f"{model} 需要 2-7 张参考图片（当前 {len(vid_img_urls)} 张）")
-            return
-        size_choice = self.vid_size_combo.currentText() if (model.startswith("sd-2") or is_kling or is_grok) else ""
+        size_choice = self.vid_size_combo.currentText() if model.startswith("sd-2") else ""
         sd_size = size_choice if size_choice in ("large", "small") else None
 
         sd_ratio = None
@@ -5824,7 +5756,7 @@ class MainWindow(QMainWindow):
             "orientation_label": size_label,
         }
         meta_parts = []
-        if model.startswith("sd-2") or is_kling or is_grok:
+        if model.startswith("sd-2"):
             meta_parts.append(sd_size or "自适应")
         if sd_ratio:
             meta_parts.append(sd_ratio)
