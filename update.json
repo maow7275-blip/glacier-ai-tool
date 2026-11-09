@@ -1,8 +1,8 @@
 {
-  "version": "4.1",
-  "notes": "视频生成等待时间延长至 2 小时并同步 hfsyapi 当前视频模型与素材限制。",
+  "version": "4.2.1",
+  "notes": "修复图片查询 404 和视频任务持续显示生成中的问题，下载期间显示下载中，查询错误及时提示。",
   "windows": {
-    "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V4.1.exe",
-    "sha256": "1144ce249acd9f6dd1bf1821d25eda4d7d0fcd2919fa9085f1477d0c21961883"
+    "url": "https://www.updateglacieraiw.com/downloads/GlacierAI_V4.2.1.exe",
+    "sha256": "48c0a6788093a97c5c98ed230e4e3837d82370865965179b5a2cc38827083d16"
   }
 }
