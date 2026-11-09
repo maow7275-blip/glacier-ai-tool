@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 from string import Template
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 import requests
 from datetime import datetime
 from PyQt5.QtWidgets import (
@@ -24,7 +24,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QPoint, QRect, QTimer, 
 from PyQt5.QtGui import QPixmap, QImage, QFont, QColor, QIcon, QPainter, QLinearGradient, QBrush, QPen, QPainterPath, QCursor
 
 
-APP_VERSION = "4.1"
+APP_VERSION = "4.2.1"
 UPDATE_MANIFEST_URLS = (
     "https://www.updateglacieraiw.com/update.json",
     "https://raw.githubusercontent.com/maow7275-blip/glacier-ai-tool/main/update.json",
@@ -216,11 +216,13 @@ class UpdateDownloadThread(QThread):
             self.failed.emit(str(e))
 
 
-API_URL = "https://www.hfsyapi.cn/v1/images/generations"
-API_BASE64_URL = "https://apigo.hfsyapi.cn/v1/images/generations"
-API_EDIT_URL = "https://www.hfsyapi.cn/v1/images/edits"
+API_URL = "https://www.hfsyapi.cn/v1/image/create"
+IMAGE_QUERY_URL_TEMPLATE = "https://www.hfsyapi.cn/v1/image/query/{task_id}"
+IMAGE_POLL_INTERVAL_SECONDS = 5
+IMAGE_GENERATION_TIMEOUT_SECONDS = 30 * 60
+IMAGE_PROMPT_LIMIT = 5000
 VIDEO_API_URL = "https://www.hfsyapi.cn/v1/video/create"
-GEMINI_API_URL_TEMPLATE = "https://www.hfsyapi.cn/v1beta/models/{model}:generateContent"
+VIDEO_QUERY_URL_TEMPLATE = "https://www.hfsyapi.cn/v1/video/query?id={task_id}"
 FILE_UPLOAD_URL = "https://www.hfsyapi.cn/v1/files/image-upload"
 BALANCE_URL = "https://www.hfsyapi.cn/api/usage/token/fund"
 
@@ -242,15 +244,8 @@ FLARE_SUNBURST_RATIO_LIST = [
     "1:1", "16:9", "9:16", "5:4", "4:3", "3:2", "3:1", "3:4",
 ]
 
-# Image generation models served by /v1/images/generations.  The API uses the
-# requested pixel dimensions as the quality selector, so these values are
-# intentionally kept separate from the Gemini image configuration below.
+# All image models now use the asynchronous image API and pixel dimensions.
 SEEDREAM_RATIO_LIST = ["16:9", "4:3", "4:5", "9:16", "1:1", "2:1", "1.85:1", "2.4:1", "21:9"]
-
-GEMINI_RATIO_LIST = [
-    "1:1", "2:1", "1:2", "3:2", "2:3", "4:3", "3:4",
-    "5:4", "4:5", "16:9", "9:16", "21:9", "9:21",
-]
 
 SIZE_MAP = {
     "1:1":  {"1k": "1024x1024", "2k": "2048x2048", "4k": "2880x2880"},
@@ -259,7 +254,7 @@ SIZE_MAP = {
     "16:9": {"1k": "1280x720",  "2k": "2048x1152", "4k": "3840x2160"},
     "4:3":  {"1k": "1024x768",  "2k": "2048x1536", "4k": "3264x2448"},
     "3:2":  {"1k": "1008x672",  "2k": "2016x1344", "4k": "3504x2336"},
-    "3:1":  {"1k": "1536x512",  "2k": "3072x1024", "4k": "4096x1365"},
+    "3:1":  {"1k": "1008x336",  "2k": "2016x672", "4k": "3504x1168"},
     "4:5":  {"1k": "832x1040",  "2k": "1664x2080", "4k": "2560x3200"},
     "3:4":  {"1k": "768x1024",  "2k": "1536x2048", "4k": "2448x3264"},
     "2:3":  {"1k": "672x1008",  "2k": "1344x2016", "4k": "2336x3504"},
@@ -278,29 +273,16 @@ SEEDREAM_SIZE_MAP = {
     "21:9": "1344x576",
 }
 
-GEMINI_SIZE_MAP = {
-    "1:1":  {"1k": "1024x1024", "2k": "2048x2048", "4k": "4096x4096"},
-    "2:1":  {"1k": "1408x704",  "2k": "2816x1408", "4k": "5632x2816"},
-    "1:2":  {"1k": "704x1408",  "2k": "1408x2816", "4k": "2816x5632"},
-    "3:2":  {"1k": "1248x832",  "2k": "2496x1664", "4k": "4992x3328"},
-    "2:3":  {"1k": "832x1248",  "2k": "1664x2496", "4k": "3328x4992"},
-    "4:3":  {"1k": "1024x768",  "2k": "2048x1536", "4k": "4096x3072"},
-    "3:4":  {"1k": "768x1024",  "2k": "1536x2048", "4k": "3072x4096"},
-    "5:4":  {"1k": "1120x896",  "2k": "2240x1792", "4k": "4480x3584"},
-    "4:5":  {"1k": "896x1120",  "2k": "1792x2240", "4k": "3584x4480"},
-    "16:9": {"1k": "1024x576",  "2k": "2048x1152", "4k": "4096x2304"},
-    "9:16": {"1k": "576x1024",  "2k": "1152x2048", "4k": "2304x4096"},
-    "21:9": {"1k": "1344x576",  "2k": "2688x1152", "4k": "5376x2304"},
-    "9:21": {"1k": "576x1344",  "2k": "1152x2688", "4k": "2304x5376"},
-}
-
 MODEL_QUALITY = {
     "gpt-image-2": ["1k"],
     "gpt-image-2.5": ["1k"],
+    "gpt-image-2.6": ["1k"],
     "gpt-image-2pro": ["2k"],
     "gpt-image-2pro-4k": ["2k", "4k"],
     "gpt-image-2.5-flare": ["1k", "2k", "4k"],
     "gpt-image-2.5-sunburst": ["1k", "2k", "4k"],
+    "gpt-image-2.6-flare": ["1k", "2k", "4k"],
+    "gpt-image-2.6-sunburst": ["1k", "2k", "4k"],
     "seedream-5.0-pro": ["1k"],
     "gemini-3.1-flash-image-preview": ["1k", "2k", "4k"],
     "gemini-3-pro-image-preview": ["1k", "2k", "4k"],
@@ -309,15 +291,33 @@ MODEL_QUALITY = {
     "nano-banana-pro": ["1k", "2k", "4k"],
 }
 
-GEMINI_MODELS = {
-    "gemini-3.1-flash-image-preview",
-    "gemini-3-pro-image-preview",
-    "nano-banana-2",
-    "nano-banana-2.1",
-    "nano-banana-pro",
+# 图片模型按产品系列分组，主下拉只显示系列，具体型号通过子菜单选择。
+IMAGE_MODEL_GROUPS = {
+    "gpt-image-2 ▸": ["gpt-image-2", "gpt-image-2pro", "gpt-image-2pro-4k"],
+    "gpt-image-2.5 ▸": [
+        "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
+    ],
+    "gpt-image-2.6 ▸": [
+        "gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
+    ],
+    "gemini-image ▸": [
+        "gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview",
+    ],
+    "nano-banana ▸": ["nano-banana-2", "nano-banana-2.1", "nano-banana-pro"],
 }
-GEMINI_MAX_REFERENCE_IMAGES = 7
-GEMINI_MAX_REFERENCE_IMAGES_BY_MODEL = {
+IMAGE_MODELS = list(IMAGE_MODEL_GROUPS) + ["seedream-5.0-pro"]
+
+IMAGE_MODEL_MAX_REFS = {
+    "gpt-image-2": 6,
+    "gpt-image-2.5": 6,
+    "gpt-image-2.6": 6,
+    "gpt-image-2pro": 4,
+    "gpt-image-2pro-4k": 4,
+    "gpt-image-2.5-flare": 16,
+    "gpt-image-2.5-sunburst": 16,
+    "gpt-image-2.6-flare": 16,
+    "gpt-image-2.6-sunburst": 16,
+    "seedream-5.0-pro": 10,
     "gemini-3.1-flash-image-preview": 4,
     "gemini-3-pro-image-preview": 7,
     "nano-banana-2": 4,
@@ -325,27 +325,16 @@ GEMINI_MAX_REFERENCE_IMAGES_BY_MODEL = {
     "nano-banana-pro": 7,
 }
 
-IMAGE_MODEL_MAX_REFS = {
-    "gpt-image-2": 6,
-    "gpt-image-2.5": 6,
-    "gpt-image-2pro": 4,
-    "gpt-image-2pro-4k": 4,
-    "gpt-image-2.5-flare": 16,
-    "gpt-image-2.5-sunburst": 16,
-    "seedream-5.0-pro": 10,
-    "gemini-3.1-flash-image-preview": 4,
-    "gemini-3-pro-image-preview": 7,
-    "nano-banana-2": 4,
-    "nano-banana-pro": 7,
-}
-
 IMAGE_MODEL_MAX_REF_BYTES = {
     "gpt-image-2": 5 * 1024 * 1024,
     "gpt-image-2.5": 20 * 1024 * 1024,
+    "gpt-image-2.6": 20 * 1024 * 1024,
     "gpt-image-2pro": 5 * 1024 * 1024,
     "gpt-image-2pro-4k": 5 * 1024 * 1024,
     "gpt-image-2.5-flare": 20 * 1024 * 1024,
     "gpt-image-2.5-sunburst": 20 * 1024 * 1024,
+    "gpt-image-2.6-flare": 20 * 1024 * 1024,
+    "gpt-image-2.6-sunburst": 20 * 1024 * 1024,
     "seedream-5.0-pro": 5 * 1024 * 1024,
     "gemini-3.1-flash-image-preview": 5 * 1024 * 1024,
     "gemini-3-pro-image-preview": 5 * 1024 * 1024,
@@ -354,32 +343,36 @@ IMAGE_MODEL_MAX_REF_BYTES = {
     "nano-banana-pro": 5 * 1024 * 1024,
 }
 IMAGE_MODEL_MAX_REF_TOTAL_BYTES = {
-    "gpt-image-2.5": 25 * 1024 * 1024,
     "gpt-image-2.5-flare": 25 * 1024 * 1024,
     "gpt-image-2.5-sunburst": 25 * 1024 * 1024,
+    "gpt-image-2.6-flare": 25 * 1024 * 1024,
+    "gpt-image-2.6-sunburst": 25 * 1024 * 1024,
 }
 
 IMAGE_MODEL_RATIOS = {
     "gpt-image-2": RATIO_LIST,
     "gpt-image-2.5": RATIO_LIST,
+    "gpt-image-2.6": RATIO_LIST,
     "gpt-image-2pro": RATIO_LIST,
     "gpt-image-2pro-4k": RATIO_LIST,
     "gpt-image-2.5-flare": FLARE_SUNBURST_RATIO_LIST,
     "gpt-image-2.5-sunburst": FLARE_SUNBURST_RATIO_LIST,
+    "gpt-image-2.6-flare": FLARE_SUNBURST_RATIO_LIST,
+    "gpt-image-2.6-sunburst": FLARE_SUNBURST_RATIO_LIST,
     "seedream-5.0-pro": SEEDREAM_RATIO_LIST,
     "gemini-3.1-flash-image-preview": RATIO_LIST,
-    "gemini-3-pro-image-preview": GEMINI_RATIO_LIST,
+    "gemini-3-pro-image-preview": RATIO_LIST,
     "nano-banana-2": RATIO_LIST,
     "nano-banana-2.1": RATIO_LIST,
-    "nano-banana-pro": GEMINI_RATIO_LIST,
+    "nano-banana-pro": RATIO_LIST,
 }
 
 IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND = {
     "gpt-image-2.5-flare",
     "gpt-image-2.5-sunburst",
+    "gpt-image-2.6-flare",
+    "gpt-image-2.6-sunburst",
 }
-
-QUALITY_TO_API = {"1k": "low", "2k": "medium", "4k": "high"}
 
 VIDEO_SIZES = {"横屏": "landscape", "竖屏": "portrait"}
 VIDEO_DURATIONS = ["4", "8", "12"]
@@ -458,7 +451,7 @@ def get_or_make_thumb_for_video(video_path):
         return None
 
 # 当前 API 可用的视频模型分组。模型名称与 /api/pricing 保持一致。
-VIDEO_MODELS = ["sd-2 ▸", "sd-2.5 ▸", "wan-3.0 ▸", "minimax-h3"]
+VIDEO_MODELS = ["sd-2 ▸", "sd-2.5 ▸", "wan-3.0 ▸", "minimax-h3", "muse-video"]
 VIDEO_MODEL_GROUPS = {
     "sd-2 ▸": [
         "sd-2-fast-480", "sd-2-fast-720",
@@ -480,13 +473,15 @@ VIDEO_MODEL_DURATIONS = {
     "wan-3.0-480": [str(i) for i in range(2, 31)],
     "wan-3.0-720": [str(i) for i in range(2, 31)],
     "minimax-h3": [str(i) for i in range(5, 16)],
+    "muse-video": [str(i) for i in range(4, 31)],
 }
 VIDEO_PROMPT_LIMIT = {
     "sd-2-fast-480": 10000, "sd-2-fast-720": 10000,
     "sd-2-vip-480": 10000, "sd-2-vip-720": 10000,
     "sd-2.5-480": 10000, "sd-2.5-720": 10000, "sd-2.5-1080": 10000,
     "wan-3.0-480": 5000, "wan-3.0-720": 5000,
-    "minimax-h3": 10000,
+    "minimax-h3": 7000,
+    "muse-video": 10000,
 }
 VIDEO_MODEL_ORIENTATIONS = {
     "sd-2-fast-480": {"横屏": "landscape", "竖屏": "portrait"},
@@ -499,6 +494,7 @@ VIDEO_MODEL_ORIENTATIONS = {
     "wan-3.0-480": {"横屏": "landscape", "竖屏": "portrait"},
     "wan-3.0-720": {"横屏": "landscape", "竖屏": "portrait"},
     "minimax-h3": {"横屏": "landscape", "竖屏": "portrait"},
+    "muse-video": {},
 }
 VIDEO_MODEL_RATIOS = {
     "sd-2-fast-480": ["9:16", "3:4", "1:1", "4:3", "16:9", "21:9"],
@@ -510,6 +506,7 @@ VIDEO_MODEL_RATIOS = {
     "sd-2.5-1080": ["9:16", "3:4", "1:1", "4:3", "16:9"],
     "wan-3.0-480": ["9:16", "16:9", "1:1", "3:4", "4:3"],
     "wan-3.0-720": ["9:16", "16:9", "1:1", "3:4", "4:3"],
+    "muse-video": ["9:16", "16:9"],
 }
 VIDEO_MODEL_MAX_IMAGES_BASE = {
     "sd-2-fast-480": 9, "sd-2-fast-720": 9,
@@ -517,6 +514,7 @@ VIDEO_MODEL_MAX_IMAGES_BASE = {
     "sd-2.5-480": 30, "sd-2.5-720": 30, "sd-2.5-1080": 30,
     "wan-3.0-480": 10, "wan-3.0-720": 10,
     "minimax-h3": 9,
+    "muse-video": 5,
 }
 VIDEO_MODEL_MAX_IMAGES_WITH_VIDEO = dict(VIDEO_MODEL_MAX_IMAGES_BASE)
 VIDEO_MODEL_MAX_VIDEOS = {
@@ -525,6 +523,7 @@ VIDEO_MODEL_MAX_VIDEOS = {
     "sd-2.5-480": 10, "sd-2.5-720": 10, "sd-2.5-1080": 10,
     "wan-3.0-480": 0, "wan-3.0-720": 0,
     "minimax-h3": 0,
+    "muse-video": 3,
 }
 VIDEO_MODEL_MAX_AUDIOS = {
     "sd-2-fast-480": 3, "sd-2-fast-720": 3,
@@ -532,14 +531,29 @@ VIDEO_MODEL_MAX_AUDIOS = {
     "sd-2.5-480": 10, "sd-2.5-720": 10, "sd-2.5-1080": 10,
     "wan-3.0-480": 5, "wan-3.0-720": 5,
     "minimax-h3": 3,
+    "muse-video": 2,
 }
 VIDEO_MODEL_MAX_IMAGE_TOTAL_BYTES = {
+    "sd-2-fast-480": 30 * 1024 * 1024,
+    "sd-2-fast-720": 30 * 1024 * 1024,
+    "sd-2-vip-480": 30 * 1024 * 1024,
+    "sd-2-vip-720": 30 * 1024 * 1024,
     "sd-2.5-480": 30 * 1024 * 1024,
     "sd-2.5-720": 30 * 1024 * 1024,
     "sd-2.5-1080": 30 * 1024 * 1024,
     "wan-3.0-480": 25 * 1024 * 1024,
     "wan-3.0-720": 25 * 1024 * 1024,
+    "muse-video": 30 * 1024 * 1024,
 }
+VIDEO_MODEL_MAX_TOTAL_REFS = {
+    "sd-2-fast-480": 12, "sd-2-fast-720": 12,
+    "sd-2-vip-480": 12, "sd-2-vip-720": 12,
+    "muse-video": 10,
+}
+
+
+def video_reference_token(kind, index):
+    return f"@{kind}{index}"
 
 
 # 自定义 ComboBox，支持点击分组项时弹出子菜单
@@ -636,6 +650,17 @@ class VideoModelComboBox(QComboBox):
             self._submenu = None
         self._current_submenu_group = None  # 清除记录
 
+        # 切换分组时会先移除旧项再插入新项，屏蔽中间状态避免触发模型配置更新。
+        self.blockSignals(True)
+        try:
+            self._select_model_without_signals(model)
+        finally:
+            self.blockSignals(False)
+        if self.currentText() == model:
+            self.currentTextChanged.emit(model)
+
+    def _select_model_without_signals(self, model):
+
         # 找到该模型所属的分组
         parent_group = None
         for group, members in self.model_groups.items():
@@ -657,6 +682,10 @@ class VideoModelComboBox(QComboBox):
                 self.addItem(model)
 
         self.setCurrentText(model)
+
+
+# 分组下拉行为与视频模型一致，单独的别名用于区分图片页语义。
+ImageModelComboBox = VideoModelComboBox
 
 
 # 注意：下拉项的灰色高光改用纯 QSS 实现（见 DARK_STYLE 中
@@ -1657,7 +1686,7 @@ class GenerateThread(QThread):
     error = pyqtSignal(int, str)
     all_done = pyqtSignal()
 
-    def __init__(self, api_key, model, prompt, size, quality, output_format, count=1, image_url=None, background=None, response_format="b64_json"):
+    def __init__(self, api_key, model, prompt, size, quality, output_format, count=1, image_url=None, background=None):
         super().__init__()
         self.api_key = api_key
         self.model = model
@@ -1668,7 +1697,6 @@ class GenerateThread(QThread):
         self.count = count
         self.image_url = image_url
         self.background = background
-        self.response_format = response_format if response_format in ("b64_json", "b64_data") else "b64_json"
 
     def _download_result(self, index, url, label="图片"):
         """Download an API result with proxy support, scoped auth, and retries."""
@@ -1676,7 +1704,6 @@ class GenerateThread(QThread):
         host = (parsed_url.hostname or "未知域名").lower()
         api_hosts = {
             (urlsplit(API_URL).hostname or "").lower(),
-            (urlsplit(API_BASE64_URL).hostname or "").lower(),
         }
         headers = {}
         if host in api_hosts:
@@ -1727,11 +1754,62 @@ class GenerateThread(QThread):
 
         raise ImageDownloadError(f"{label}下载失败（{host}）：{last_error}")
 
+    def _wait_for_image(self, index, data, headers):
+        task_id = None
+        deadline = time.monotonic() + IMAGE_GENERATION_TIMEOUT_SECONDS
+        while True:
+            inner = data.get("data") if isinstance(data.get("data"), dict) else data
+            status = str(inner.get("status") or "").lower()
+            if data.get("success") is False or status in ("failed", "failure", "error", "cancelled", "canceled"):
+                reason = inner.get("error") or inner.get("fail_reason") or data.get("message") or "未知错误"
+                if isinstance(reason, dict):
+                    reason = reason.get("message") or json.dumps(reason, ensure_ascii=False)
+                raise RuntimeError(f"图片生成失败: {reason}")
+            images = inner.get("images")
+            if status in ("completed", "success", "succeeded") or (not status and images):
+                if not isinstance(images, list) or not images or not isinstance(images[0], dict):
+                    raise RuntimeError("图片任务完成但未返回图片")
+                return images[0]
+            task_id = task_id or inner.get("id") or inner.get("task_id")
+            if not task_id:
+                raise RuntimeError("图片 API 返回异常: 无法识别 task_id")
+            query_url = IMAGE_QUERY_URL_TEMPLATE.format(task_id=quote(str(task_id), safe=""))
+            self.progress.emit(f"第{index+1}张图片: 等待生成 ({status or 'pending'})...")
+
+            # Retry queries on the same task; never resubmit a potentially paid job.
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(f"图片生成等待超时，任务 ID: {task_id}")
+                time.sleep(min(IMAGE_POLL_INTERVAL_SECONDS, remaining))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(f"图片生成等待超时，任务 ID: {task_id}")
+                try:
+                    response = requests.get(query_url, headers=headers, timeout=(10, min(30, remaining)))
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                    continue
+                if response.status_code in (408, 429, 500, 502, 503, 504):
+                    if response.status_code == 429:
+                        try:
+                            delay = max(0, int(response.headers.get("Retry-After", "0")))
+                        except (TypeError, ValueError):
+                            delay = 0
+                        time.sleep(min(delay, max(0, deadline - time.monotonic())))
+                    continue
+                if response.status_code != 200:
+                    raise RuntimeError(f"图片查询失败 ({response.status_code}): {response.text[:200]}")
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise RuntimeError("图片查询返回异常")
+                break
+
     def _generate_one(self, index):
-        if self.model in GEMINI_MODELS:
-            self._generate_one_gemini(index)
-            return
-        print(f"[DEBUG] _generate_one({index}) started, image_url={'YES' if self.image_url else 'NO'}, model={self.model}", flush=True)
+        if not self.prompt.strip() or len(self.prompt) > IMAGE_PROMPT_LIMIT:
+            raise ValueError(f"图片提示词不能为空且不能超过 {IMAGE_PROMPT_LIMIT} 字")
+        refs = [self.image_url] if isinstance(self.image_url, str) else list(self.image_url or [])
+        if len(refs) > IMAGE_MODEL_MAX_REFS.get(self.model, 4):
+            raise ValueError("参考图数量超过当前模型限制")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -1739,32 +1817,19 @@ class GenerateThread(QThread):
         payload = {
             "model": self.model,
             "prompt": self.prompt,
-            "n": 1,
             "size": self.size,
-            "response_format": self.response_format,
         }
-        # hfsyapi's current GPT-Image/Seedream contract does not accept the
-        # legacy quality/output_format fields. Size carries the resolution.
         if self.model in IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND and self.background:
             payload["background"] = self.background
-        api_url = API_BASE64_URL if self.response_format == "b64_data" else API_URL
-        if self.image_url:
-            payload["reference_images"] = list(self.image_url)
-            print(f"[DEBUG] POST {api_url} (json, {len(self.image_url)} reference_images)", flush=True)
-        else:
-            print(f"[DEBUG] POST {api_url} (json, no image)", flush=True)
+        if refs:
+            payload["reference_images"] = refs
 
         max_retries = 2
         resp = None
         for attempt in range(max_retries + 1):
-            resp = requests.post(api_url, headers=headers, json=payload, timeout=(15, 600))
-            try:
-                with open("debug_output.log", "a", encoding="utf-8") as _f:
-                    _f.write(f"[RESP] model={self.model}, status={resp.status_code}, body={resp.text[:500]}\n")
-            except Exception:
-                pass
-            print(f"[DEBUG] Response status={resp.status_code}, body={resp.text[:300]}", flush=True)
-            if resp.status_code == 200:
+            resp = requests.post(API_URL, headers=headers, json=payload, timeout=(15, 60))
+            append_debug_log(f"[IMAGE SUBMIT] model={self.model}, status={resp.status_code}")
+            if resp.status_code in (200, 202):
                 break
             if resp.status_code == 429 and attempt < max_retries:
                 try:
@@ -1775,24 +1840,18 @@ class GenerateThread(QThread):
                 self.progress.emit(f"第{index+1}张被限流，{wait}秒后重试...")
                 time.sleep(wait)
                 continue
-            if resp.status_code in (500, 502, 503, 504) and attempt < max_retries:
-                wait = (attempt + 1) * 3
-                print(f"[DEBUG] Retry {attempt+1}/{max_retries} after {wait}s...", flush=True)
-                self.progress.emit(f"第{index+1}张遇到服务器错误，{wait}秒后重试...")
-                time.sleep(wait)
-            else:
-                break
+            break
 
-        if resp.status_code != 200:
+        if resp.status_code not in (200, 202):
             self.error.emit(index, f"第{index+1}张 API 错误 ({resp.status_code}): {resp.text[:200]}")
             return
 
         data = resp.json()
-        if "data" not in data or len(data["data"]) == 0:
+        if not isinstance(data, dict):
             self.error.emit(index, f"第{index+1}张 API 返回异常")
             return
 
-        item = data["data"][0]
+        item = self._wait_for_image(index, data, headers)
         b64_value = item.get("b64_data") or item.get("b64_json")
         if b64_value:
             # Some deployments use the b64_json field for a URL despite the
@@ -1871,121 +1930,6 @@ class GenerateThread(QThread):
             t.join()
         self.all_done.emit()
 
-    def _generate_one_gemini(self, index):
-        print(f"[DEBUG] _generate_one_gemini({index}) started, image_url={'YES' if self.image_url else 'NO'}, model={self.model}", flush=True)
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        parts = [{"text": self.prompt}]
-        if self.image_url:
-            max_refs = GEMINI_MAX_REFERENCE_IMAGES_BY_MODEL.get(self.model, GEMINI_MAX_REFERENCE_IMAGES)
-            for url in list(self.image_url)[:max_refs]:
-                parts.append({"fileData": {"fileUri": url}})
-
-        ratio = "1:1"
-        for r in GEMINI_RATIO_LIST:
-            if GEMINI_SIZE_MAP.get(r, {}).get(self.quality) == self.size:
-                ratio = r
-                break
-
-        payload = {
-            "contents": [{"parts": parts}],
-            "generationConfig": {
-                "imageConfig": {
-                    "aspectRatio": ratio,
-                    "imageSize": self.quality.upper()
-                }
-            }
-        }
-
-        api_url = GEMINI_API_URL_TEMPLATE.format(model=self.model)
-        print(f"[DEBUG] POST {api_url} (gemini, ratio={ratio}, refs={len(self.image_url) if self.image_url else 0})", flush=True)
-
-        max_retries = 2
-        resp = None
-        for attempt in range(max_retries + 1):
-            resp = requests.post(api_url, headers=headers, json=payload, timeout=(15, 600))
-            try:
-                with open("debug_output.log", "a", encoding="utf-8") as _f:
-                    _f.write(f"[RESP] model={self.model}, status={resp.status_code}, body={resp.text[:500]}\n")
-            except Exception:
-                pass
-            print(f"[DEBUG] Gemini response status={resp.status_code}, body={resp.text[:300]}", flush=True)
-            if resp.status_code == 200:
-                break
-            if resp.status_code == 429 and attempt < max_retries:
-                try:
-                    wait = max(1, int(resp.headers.get("Retry-After", "5")))
-                except (TypeError, ValueError):
-                    wait = 5
-                print(f"[DEBUG] 429 limited, retry {attempt+1}/{max_retries} after {wait}s...", flush=True)
-                self.progress.emit(f"第{index+1}张被限流，{wait}秒后重试...")
-                time.sleep(wait)
-                continue
-            if resp.status_code in (500, 502, 503, 504) and attempt < max_retries:
-                wait = (attempt + 1) * 3
-                self.progress.emit(f"第{index+1}张遇到服务器错误，{wait}秒后重试...")
-                time.sleep(wait)
-            else:
-                break
-
-        if resp.status_code != 200:
-            self.error.emit(index, f"第{index+1}张 API 错误 ({resp.status_code}): {resp.text[:200]}")
-            return
-
-        try:
-            data = resp.json()
-        except Exception:
-            self.error.emit(index, f"第{index+1}张 API 返回非 JSON")
-            return
-
-        img_url = self._extract_gemini_image_url(data)
-        if not img_url:
-            self.error.emit(index, f"第{index+1}张未找到图片地址")
-            return
-
-        if isinstance(img_url, (bytes, bytearray)):
-            self.one_finished.emit(index, bytes(img_url))
-            return
-
-        if img_url.startswith("/"):
-            img_url = "https://www.hfsyapi.cn" + img_url
-
-        print(f"[DEBUG] Downloading gemini image from: {img_url}", flush=True)
-        img_resp = self._download_result(index, img_url)
-        print(f"[DEBUG] Gemini download status={img_resp.status_code}, length={len(img_resp.content)}", flush=True)
-
-        if img_resp.status_code == 200 and len(img_resp.content) > 1000:
-            self.one_finished.emit(index, img_resp.content)
-        else:
-            self.error.emit(index, f"第{index+1}张下载失败 ({img_resp.status_code})")
-
-    def _extract_gemini_image_url(self, data):
-        try:
-            candidates = data.get("candidates", [])
-            for cand in candidates:
-                content = cand.get("content", {})
-                for p in content.get("parts", []):
-                    fd = p.get("fileData") or p.get("file_data")
-                    if fd:
-                        uri = fd.get("fileUri") or fd.get("file_uri")
-                        if uri:
-                            return uri
-                    inline = p.get("inlineData") or p.get("inline_data")
-                    if inline and inline.get("data"):
-                        encoded = inline["data"]
-                        try:
-                            if isinstance(encoded, str) and encoded.startswith("data:"):
-                                encoded = encoded.split(",", 1)[1]
-                            return base64.b64decode(re.sub(r"\s+", "", encoded), validate=True)
-                        except (ValueError, TypeError):
-                            return None
-        except Exception as e:
-            print(f"[DEBUG] _extract_gemini_image_url error: {e}", flush=True)
-        return None
-
     def _safe_generate(self, index):
         try:
             self._generate_one(index)
@@ -2044,8 +1988,9 @@ class VideoGenerateThread(QThread):
             "duration": int(self.duration),
             "watermark": False,
         }
-        payload["orientation"] = self.size
-        if self.sd_size:
+        if VIDEO_MODEL_ORIENTATIONS.get(self.model, VIDEO_SIZES):
+            payload["orientation"] = self.size
+        if self.sd_size and self.model.startswith("sd-2"):
             payload["size"] = self.sd_size
         if self.sd_ratio:
             payload["ratio"] = self.sd_ratio
@@ -2064,11 +2009,7 @@ class VideoGenerateThread(QThread):
             payload["end_image_url"] = self.end_image_url
 
         def _log(tag, content):
-            try:
-                with open("debug_output.log", "a", encoding="utf-8") as _f:
-                    _f.write(f"[VIDEO {tag}] index={index}: {content}\n")
-            except Exception:
-                pass
+            append_debug_log(f"[VIDEO {tag}] index={index}: {content}")
 
         self.progress.emit(f"第{index+1}个视频: 正在提交请求...")
         resp = None
@@ -2105,7 +2046,7 @@ class VideoGenerateThread(QThread):
             return
 
         self.progress.emit(f"第{index+1}个视频: 任务已提交，等待生成...")
-        query_url = f"https://www.hfsyapi.cn/v1/video/query?id={task_id}"
+        query_url = VIDEO_QUERY_URL_TEMPLATE.format(task_id=quote(str(task_id), safe=""))
 
         poll_started = time.monotonic()
         poll_deadline = poll_started + VIDEO_GENERATION_TIMEOUT_SECONDS
@@ -2113,21 +2054,27 @@ class VideoGenerateThread(QThread):
         while time.monotonic() < poll_deadline:
             remaining = poll_deadline - time.monotonic()
             time.sleep(min(VIDEO_POLL_INTERVAL_SECONDS, max(0, remaining)))
+            remaining = poll_deadline - time.monotonic()
+            if remaining <= 0:
+                break
             poll_count += 1
             try:
-                poll_resp = requests.get(query_url, headers=headers, timeout=(10, 30))
-            except Exception as e:
+                poll_resp = requests.get(query_url, headers=headers, timeout=(10, min(30, remaining)))
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 _log("POLL_ERR", f"i={poll_count - 1}, err={e}")
                 continue
             if poll_resp.status_code != 200:
                 _log("POLL_HTTP", f"i={poll_count - 1}, status={poll_resp.status_code}, body={poll_resp.text[:300]}")
+                if poll_resp.status_code not in (408, 429, 500, 502, 503, 504):
+                    self.error.emit(index, f"第{index+1}个视频查询失败 ({poll_resp.status_code})，任务 ID: {task_id}: {poll_resp.text[:200]}")
+                    return
                 if poll_resp.status_code == 429:
                     try:
                         extra = max(0, int(poll_resp.headers.get("Retry-After", "0")))
                     except (TypeError, ValueError):
                         extra = 0
                     if extra:
-                        time.sleep(extra)
+                        time.sleep(min(extra, max(0, poll_deadline - time.monotonic())))
                 continue
             try:
                 poll_data = poll_resp.json()
@@ -2137,13 +2084,17 @@ class VideoGenerateThread(QThread):
 
             inner = poll_data.get("data") if isinstance(poll_data.get("data"), dict) else {}
             status = str(inner.get("status") or poll_data.get("status") or "").lower()
-            video_url = inner.get("video_url") or poll_data.get("video_url") or ""
+            if poll_data.get("success") is False:
+                reason = inner.get("fail_reason") or inner.get("error") or poll_data.get("message") or "未知错误"
+                self.error.emit(index, f"第{index+1}个视频查询失败: {reason}")
+                return
+            video_url = inner.get("result_url") or inner.get("video_url") or poll_data.get("result_url") or poll_data.get("video_url") or ""
             if not video_url:
                 detail = inner.get("detail") if isinstance(inner.get("detail"), dict) else {}
                 video_url = detail.get("url") or ""
             progress_pct = inner.get("progress", 0)
 
-            if status in ("completed", "success"):
+            if status in ("completed", "complete", "success", "succeeded", "finished"):
                 if not video_url:
                     _log("NO_URL", f"poll_data={json.dumps(poll_data, ensure_ascii=False)[:600]}")
                     self.error.emit(index, f"第{index+1}个任务完成但未返回视频地址")
@@ -2160,14 +2111,14 @@ class VideoGenerateThread(QThread):
                 else:
                     self.error.emit(index, f"第{index+1}个视频下载失败 ({vid_resp.status_code})")
                 return
-            if status in ("failed", "failure"):
-                err_msg = inner.get("error") or inner.get("message") or poll_data.get("message") or "未知错误"
+            if status in ("failed", "failure", "error", "cancelled", "canceled"):
+                err_msg = inner.get("fail_reason") or inner.get("error") or inner.get("message") or poll_data.get("message") or "未知错误"
                 self.error.emit(index, f"第{index+1}个视频生成失败: {err_msg}")
                 return
             elapsed = int(time.monotonic() - poll_started)
             self.progress.emit(f"第{index+1}个视频: 生成中... ({elapsed}s, {progress_pct}%, {status or 'pending'})")
 
-        self.error.emit(index, f"第{index+1}个视频生成超时")
+        self.error.emit(index, f"第{index+1}个视频生成超时，任务 ID: {task_id}")
 
     def _safe_generate(self, index):
         try:
@@ -2210,6 +2161,7 @@ class Task:
         self.status = "pending"
         self.results = []
         self.error_msg = ""
+        self.progress_message = ""
         self.thread = None
         self.done_count = 0
         self.total = int(summary.get("count", 1))
@@ -2218,6 +2170,7 @@ class Task:
 
 class TaskScheduler(QObject):
     task_state_changed = pyqtSignal(int)
+    task_progress_changed = pyqtSignal(int, str)
     queue_changed = pyqtSignal()
 
     def __init__(self, main_window, max_concurrent=3, max_queue=None):
@@ -2287,6 +2240,7 @@ class TaskScheduler(QObject):
         t.status = "pending"
         t.results = []
         t.error_msg = ""
+        t.progress_message = ""
         t.done_count = 0
         t.thread = None
         if t not in self.pending:
@@ -2499,6 +2453,8 @@ class TaskCard(QFrame):
         text = self.STATUS_TEXT.get(status_key, status_key)
         if status_key == "running" and t.total > 1:
             text = f"生成中 {t.done_count}/{t.total}"
+        if status_key == "running" and "正在下载" in t.progress_message:
+            text = "下载中"
         self.status_lbl.setText(text)
         self.status_lbl.setStyleSheet(self._status_style(status_key, theme))
 
@@ -3511,6 +3467,7 @@ class MainWindow(QMainWindow):
         self._screen_signal_connected = False
         self.scheduler = TaskScheduler(self, max_concurrent=self._concurrency)
         self.scheduler.task_state_changed.connect(self._on_task_state_changed)
+        self.scheduler.task_progress_changed.connect(self._on_task_progress)
         self.scheduler.queue_changed.connect(self._refresh_status_bar)
         self._task_cards = {}
         self.init_ui()
@@ -4344,22 +4301,13 @@ class MainWindow(QMainWindow):
         l1 = QLabel("模型")
         l1.setObjectName("paramLabel")
         grid.addWidget(l1, 0, 0)
-        self.model_combo = QComboBox()
+        self.model_combo = ImageModelComboBox(
+            model_groups=IMAGE_MODEL_GROUPS,
+            main_window=self,
+        )
         setup_combo(self.model_combo)
-        self.model_combo.addItems([
-            "gpt-image-2",
-            "gpt-image-2.5",
-            "gpt-image-2pro",
-            "gpt-image-2pro-4k",
-            "gpt-image-2.5-flare",
-            "gpt-image-2.5-sunburst",
-            "seedream-5.0-pro",
-            "gemini-3.1-flash-image-preview",
-            "gemini-3-pro-image-preview",
-            "nano-banana-2",
-            "nano-banana-2.1",
-            "nano-banana-pro",
-        ])
+        self.model_combo.addItems(IMAGE_MODELS)
+        self.model_combo._select_model("gpt-image-2")
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         grid.addWidget(self.model_combo, 1, 0)
 
@@ -4387,32 +4335,23 @@ class MainWindow(QMainWindow):
         self.format_combo.addItems(["png", "jpeg"])
         grid.addWidget(self.format_combo, 3, 1)
 
-        self.response_format_label = QLabel("返回格式")
-        self.response_format_label.setObjectName("paramLabel")
-        grid.addWidget(self.response_format_label, 4, 0)
-        self.response_format_combo = QComboBox()
-        setup_combo(self.response_format_combo)
-        self.response_format_combo.addItem("图片 URL", "b64_json")
-        self.response_format_combo.addItem("Base64", "b64_data")
-        grid.addWidget(self.response_format_combo, 5, 0)
-
         self.background_label = QLabel("背景")
         self.background_label.setObjectName("paramLabel")
-        grid.addWidget(self.background_label, 4, 1)
+        grid.addWidget(self.background_label, 4, 0)
         self.background_combo = QComboBox()
         setup_combo(self.background_combo)
         self.background_combo.addItems(["默认", "透明"])
         self.background_label.setVisible(False)
         self.background_combo.setVisible(False)
-        grid.addWidget(self.background_combo, 5, 1)
+        grid.addWidget(self.background_combo, 5, 0)
 
         l5 = QLabel("生成数量")
         l5.setObjectName("paramLabel")
-        grid.addWidget(l5, 6, 0)
+        grid.addWidget(l5, 4, 1)
         self.img_count_combo = QComboBox()
         setup_combo(self.img_count_combo)
         self.img_count_combo.addItems([str(i) for i in range(1, 11)])
-        grid.addWidget(self.img_count_combo, 7, 0)
+        grid.addWidget(self.img_count_combo, 5, 1)
 
         pm_layout.addLayout(grid)
         pm_layout.addSpacing(8)
@@ -4493,6 +4432,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(left_scroll, 4)
         layout.addLayout(right, 6)
         self.content_stack.addWidget(page)
+        self.on_model_changed(self.model_combo.currentText())
 
     def _build_video_page(self):
         page = QWidget()
@@ -4737,6 +4677,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.video_model_combo, 1, 0)
 
         l2 = QLabel("画面方向")
+        self.video_orientation_label = l2
         l2.setObjectName("paramLabel")
         grid.addWidget(l2, 0, 1)
         self.video_size_combo = QComboBox()
@@ -5106,6 +5047,9 @@ class MainWindow(QMainWindow):
 
     def on_pick_vid_ref(self):
         max_imgs = self._current_max_images()
+        if self._remaining_video_ref_slots() <= 0:
+            QMessageBox.warning(self, "提示", "当前模型的参考素材总数已达上限")
+            return
         if len(self._vid_img_ref_data_list) >= max_imgs:
             QMessageBox.warning(self, "提示", f"当前模型最多支持 {max_imgs} 张参考图片")
             return
@@ -5119,7 +5063,7 @@ class MainWindow(QMainWindow):
         )
         if not paths:
             return
-        slots_left = max_imgs - len(self._vid_img_ref_data_list)
+        slots_left = min(max_imgs - len(self._vid_img_ref_data_list), self._remaining_video_ref_slots())
         paths = paths[:slots_left]
         model = self.video_model_combo.currentText()
         max_total_bytes = VIDEO_MODEL_MAX_IMAGE_TOTAL_BYTES.get(model)
@@ -5132,7 +5076,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "提示", f"无法读取图片大小：{os.path.basename(path)} ({exc})")
                 continue
             if max_total_bytes and existing_total + file_size > max_total_bytes:
-                QMessageBox.warning(self, "提示", f"{model} 的参考图总大小不能超过 30MB")
+                max_total_mb = max_total_bytes // (1024 * 1024)
+                QMessageBox.warning(self, "提示", f"{model} 的参考图总大小不能超过 {max_total_mb}MB")
                 break
             valid_paths.append(path)
             existing_total += file_size
@@ -5183,7 +5128,6 @@ class MainWindow(QMainWindow):
                 w.deleteLater()
         thumb_size = 90
         model = self.video_model_combo.currentText()
-        is_sd = model.startswith("sd-2")
         for i, slot in enumerate(self._vid_img_ref_data_list):
             img_bytes = slot.get("bytes")
             uploading = slot.get("uploading")
@@ -5191,7 +5135,7 @@ class MainWindow(QMainWindow):
                 continue
 
             container = QWidget()
-            container.setFixedSize(thumb_size + 4, thumb_size + (40 if is_sd else 22))
+            container.setFixedSize(thumb_size + 4, thumb_size + 40)
             container.setStyleSheet("background: transparent;")
             cl = QVBoxLayout(container)
             cl.setContentsMargins(0, 0, 0, 0)
@@ -5214,14 +5158,13 @@ class MainWindow(QMainWindow):
                 img_lbl.setText("上传中...")
             cl.addWidget(img_lbl, alignment=Qt.AlignCenter)
 
-            if is_sd:
-                ref_token = f"@{i+1}" if is_sd_20 else f"@图片{i+1}"
-                ins_btn = QPushButton(f"插入 {ref_token}")
-                ins_btn.setFixedSize(thumb_size, 18)
-                ins_btn.setCursor(Qt.PointingHandCursor)
-                ins_btn.setStyleSheet("background: " + get_theme(self._theme)['accent_soft'] + "; color: " + get_theme(self._theme)['accent'] + "; border: none; border-radius: 3px; font-size: 10px;")
-                ins_btn.clicked.connect(lambda checked, token=ref_token: self._insert_ref_token(token))
-                cl.addWidget(ins_btn, alignment=Qt.AlignCenter)
+            ref_token = video_reference_token("image", i + 1)
+            ins_btn = QPushButton(f"插入 {ref_token}")
+            ins_btn.setFixedSize(thumb_size, 18)
+            ins_btn.setCursor(Qt.PointingHandCursor)
+            ins_btn.setStyleSheet("background: " + get_theme(self._theme)['accent_soft'] + "; color: " + get_theme(self._theme)['accent'] + "; border: none; border-radius: 3px; font-size: 10px;")
+            ins_btn.clicked.connect(lambda checked, token=ref_token: self._insert_ref_token(token))
+            cl.addWidget(ins_btn, alignment=Qt.AlignCenter)
 
             del_btn = QPushButton("删除")
             del_btn.setFixedSize(thumb_size, 18)
@@ -5248,6 +5191,9 @@ class MainWindow(QMainWindow):
         url = self.vid_video_ref_input.text().strip()
         if not url:
             return
+        if self._remaining_video_ref_slots() <= 0:
+            QMessageBox.warning(self, "提示", "当前模型的参考素材总数已达上限")
+            return
         max_videos = self._current_max_videos()
         if len(self._vid_video_ref_url_list) >= max_videos:
             QMessageBox.warning(self, "提示", f"当前模型最多支持 {max_videos} 条参考视频")
@@ -5267,6 +5213,9 @@ class MainWindow(QMainWindow):
     def on_add_vid_audio_ref(self):
         url = self.vid_audio_ref_input.text().strip()
         if not url:
+            return
+        if self._remaining_video_ref_slots() <= 0:
+            QMessageBox.warning(self, "提示", "当前模型的参考素材总数已达上限")
             return
         max_audios = self._current_max_audios()
         if len(self._vid_audio_ref_url_list) >= max_audios:
@@ -5289,14 +5238,13 @@ class MainWindow(QMainWindow):
             w = self.vid_audio_ref_list_layout.takeAt(0).widget()
             if w:
                 w.deleteLater()
-        reference_offset = len(self._vid_img_ref_data_list) + len(self._vid_video_ref_url_list)
         for i, url in enumerate(self._vid_audio_ref_url_list):
             row = QWidget()
             row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(6)
-            ref_token = f"@声音{i+1}"
+            ref_token = video_reference_token("audio", i + 1)
             tag = QLabel(ref_token)
             tag.setStyleSheet("color: " + get_theme(self._theme)['accent'] + "; font-size: 11px; min-width: 50px; background: transparent;")
             rl.addWidget(tag)
@@ -5328,14 +5276,13 @@ class MainWindow(QMainWindow):
             w = self.vid_video_ref_list_layout.takeAt(0).widget()
             if w:
                 w.deleteLater()
-        reference_offset = len(self._vid_img_ref_data_list)
         for i, url in enumerate(self._vid_video_ref_url_list):
             row = QWidget()
             row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(6)
-            ref_token = f"@视频{i+1}"
+            ref_token = video_reference_token("video", i + 1)
             tag = QLabel(ref_token)
             tag.setStyleSheet("color: " + get_theme(self._theme)['accent'] + "; font-size: 11px; min-width: 50px; background: transparent;")
             rl.addWidget(tag)
@@ -5368,17 +5315,12 @@ class MainWindow(QMainWindow):
         self.video_prompt_input.setFocus()
 
     def _mention_candidates(self):
-        model = self.video_model_combo.currentText() if hasattr(self, "video_model_combo") else ""
         cands = []
-        n_imgs = sum(1 for s in self._vid_img_ref_data_list if s.get("url"))
-        for i in range(1, n_imgs + 1):
-            cands.append(f"图片{i}")
-        n_vids = len(self._vid_video_ref_url_list)
-        for i in range(1, n_vids + 1):
-            cands.append(f"视频{i}")
-        n_auds = len(self._vid_audio_ref_url_list)
-        for i in range(1, n_auds + 1):
-            cands.append(f"声音{i}")
+        for i, slot in enumerate(self._vid_img_ref_data_list, 1):
+            if slot.get("url"):
+                cands.append(video_reference_token("image", i)[1:])
+        for kind, refs in (("video", self._vid_video_ref_url_list), ("audio", self._vid_audio_ref_url_list)):
+            cands.extend(video_reference_token(kind, i)[1:] for i in range(1, len(refs) + 1))
         return cands
 
     def on_pick_keyframe(self, tag):
@@ -5471,22 +5413,30 @@ class MainWindow(QMainWindow):
         self.video_size_combo.addItems(list(orientations.keys()))
         if prev_orient in orientations:
             self.video_size_combo.setCurrentText(prev_orient)
+        self.video_orientation_label.setVisible(bool(orientations))
+        self.video_size_combo.setVisible(bool(orientations))
 
         is_sd = model.startswith("sd-2")
         is_minimax = model == "minimax-h3"
 
         is_sd_25 = model in ("sd-2.5-480", "sd-2.5-720", "sd-2.5-1080")
         is_wan = model in ("wan-3.0-480", "wan-3.0-720")
+        is_muse = model == "muse-video"
 
-        if is_sd_25:
+        if is_muse:
             self.vid_video_ref_card.setVisible(True)
             self.vid_video_ref_title.setText("参考视频（可选）")
-            self.vid_video_ref_hint.setText("提示：最多 10 条，分辨率 480p-1080p，单段 2-30s、≤200MB，总时长 ≤30s，必须公网 URL")
+            self.vid_video_ref_hint.setText("最多 3 条，单条 ≤40MB，时长 ≤120s；素材合计最多 10 个、≤100MB")
+            self.vid_audio_ref_card.setVisible(True)
+        elif is_sd_25:
+            self.vid_video_ref_card.setVisible(True)
+            self.vid_video_ref_title.setText("参考视频（可选）")
+            self.vid_video_ref_hint.setText("最多 10 条，分辨率 720-2160px，单段 3-10s、≤200MB，总时长 ≤15s")
             self.vid_audio_ref_card.setVisible(True)
         elif is_sd:
             self.vid_video_ref_card.setVisible(True)
             self.vid_video_ref_title.setText("参考视频（可选）")
-            self.vid_video_ref_hint.setText("提示：最多 3 条，分辨率 480p–720p，单段 2–15s、≤50MB，总时长 ≤15s，必须公网 URL")
+            self.vid_video_ref_hint.setText("最多 3 条，分辨率 720-2160px，单段 3-10s、≤200MB，总时长 ≤15s；全部素材合计最多 12 个")
             self.vid_audio_ref_card.setVisible(True)
         elif is_minimax:
             self.vid_video_ref_card.setVisible(False)
@@ -5515,23 +5465,29 @@ class MainWindow(QMainWindow):
             self.vid_ratio_label.setVisible(False)
             self.vid_ratio_combo.setVisible(False)
 
-        if model == "minimax-h3":
-            self.vid_img_ref_hint.setText("提示：最多 9 张参考图片；prompt 中可用 @1 @2... 引用")
+        image_token = video_reference_token("image", 1)
+        audio_token = video_reference_token("audio", 1)
+        if is_muse:
+            self.vid_img_ref_hint.setText(f"最多 5 张，总大小 ≤30MB，建议单张 ≤20MB；{image_token}")
+        elif model == "minimax-h3":
+            self.vid_img_ref_hint.setText(f"至少 1 张、最多 9 张参考图片，单张 ≤20MB；{image_token}")
         elif is_sd_25:
-            self.vid_img_ref_hint.setText("提示：最多 30 张，所有参考图总大小 ≤30MB，建议单张 ≤20MB；prompt 中可用 @1 @2... 引用")
+            self.vid_img_ref_hint.setText(f"最多 30 张，总大小 ≤30MB，建议单张 ≤20MB；{image_token}")
         elif is_wan:
             self.vid_img_ref_hint.setText("提示：最多 10 张参考图片，所有参考图总大小 ≤25MB，建议单张 ≤20MB")
         elif is_sd:
-            self.vid_img_ref_hint.setText("提示：最多 9 张，单图 ≤30MB，所有素材总 ≤64MB；prompt 中可用 @1 @2... 引用")
+            self.vid_img_ref_hint.setText(f"最多 9 张，总大小 ≤30MB，建议单张 ≤20MB；{image_token}")
         # 更新音频提示
-        if is_sd_25:
-            self.vid_audio_ref_hint.setText("提示：最多 10 条，单条 2-30s、≤15MB，总时长 ≤30s，必须公网 URL；prompt 中可用 @声音1 @声音2... 引用")
+        if is_muse:
+            self.vid_audio_ref_hint.setText(f"最多 2 条，单条 ≤40MB；{audio_token}")
+        elif is_sd_25:
+            self.vid_audio_ref_hint.setText(f"最多 10 条，单条 3-10s、≤15MB，总时长 ≤15s；{audio_token}")
         elif is_sd:
-            self.vid_audio_ref_hint.setText("提示：最多 3 条，单条 ≤15MB，总时长 ≤15s，必须公网 URL；prompt 中可用 @声音1 @声音2... 引用")
+            self.vid_audio_ref_hint.setText(f"最多 3 条，单条 3-10s、≤15MB，总时长 ≤15s；{audio_token}")
         elif is_wan:
-            self.vid_audio_ref_hint.setText("提示：最多 5 条参考音频；prompt 中可用 @声音1 @声音2... 引用")
+            self.vid_audio_ref_hint.setText(f"最多 5 条，单条 3-10s、≤15MB，总时长 ≤15s；{audio_token}")
         elif is_minimax:
-            self.vid_audio_ref_hint.setText("提示：最多 3 条参考音频；prompt 中可用 @声音1 @声音2... 引用")
+            self.vid_audio_ref_hint.setText(f"最多 3 条，单条 3-10s、≤15MB，总时长 ≤15s；{audio_token}")
 
         max_imgs = self._current_max_images()
         max_vids = self._current_max_videos()
@@ -5564,6 +5520,13 @@ class MainWindow(QMainWindow):
         model = self.video_model_combo.currentText()
         return VIDEO_MODEL_MAX_AUDIOS.get(model, 0)
 
+    def _remaining_video_ref_slots(self):
+        limit = VIDEO_MODEL_MAX_TOTAL_REFS.get(self.video_model_combo.currentText())
+        if limit is None:
+            return math.inf
+        count = len(self._vid_img_ref_data_list) + len(self._vid_video_ref_url_list) + len(self._vid_audio_ref_url_list)
+        return max(0, limit - count)
+
     def on_model_changed(self, model):
         self.quality_combo.clear()
         qualities = MODEL_QUALITY.get(model, ["1k"])
@@ -5572,28 +5535,18 @@ class MainWindow(QMainWindow):
         current_ratio = self.size_combo.currentText()
         self.size_combo.blockSignals(True)
         self.size_combo.clear()
-        if model in GEMINI_MODELS:
-            ratios = IMAGE_MODEL_RATIOS.get(model, GEMINI_RATIO_LIST)
-            self.size_combo.addItems(ratios)
-            if current_ratio in ratios:
-                self.size_combo.setCurrentText(current_ratio)
-            else:
-                self.size_combo.setCurrentText(ratios[0])
+        ratios = IMAGE_MODEL_RATIOS.get(model, RATIO_LIST)
+        self.size_combo.addItems(ratios)
+        if current_ratio in ratios:
+            self.size_combo.setCurrentText(current_ratio)
         else:
-            ratios = IMAGE_MODEL_RATIOS.get(model, RATIO_LIST)
-            self.size_combo.addItems(ratios)
-            if current_ratio in ratios:
-                self.size_combo.setCurrentText(current_ratio)
-            else:
-                self.size_combo.setCurrentText(ratios[0])
+            self.size_combo.setCurrentText(ratios[0])
         self.size_combo.blockSignals(False)
 
         has_transparent_bg = model in IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND
         if hasattr(self, "background_label"):
             self.background_label.setVisible(has_transparent_bg)
             self.background_combo.setVisible(has_transparent_bg)
-            self.response_format_label.setVisible(model not in GEMINI_MODELS)
-            self.response_format_combo.setVisible(model not in GEMINI_MODELS)
 
         max_refs = IMAGE_MODEL_MAX_REFS.get(model, 4)
         max_each_bytes = IMAGE_MODEL_MAX_REF_BYTES.get(model)
@@ -5615,6 +5568,9 @@ class MainWindow(QMainWindow):
         print(f"[DEBUG] on_generate called, prompt='{prompt[:50]}'")
         if not prompt:
             QMessageBox.warning(self, "提示", "请输入提示词")
+            return
+        if len(prompt) > IMAGE_PROMPT_LIMIT:
+            QMessageBox.warning(self, "提示", f"图片提示词不能超过 {IMAGE_PROMPT_LIMIT} 字（当前 {len(prompt)} 字）")
             return
         if any(s.get("uploading") for s in self._img_ref_data_list):
             QMessageBox.warning(self, "提示", "参考图正在上传，请稍候")
@@ -5643,16 +5599,13 @@ class MainWindow(QMainWindow):
 
         ratio = self.size_combo.currentText()
         quality = self.quality_combo.currentText()
-        if model in GEMINI_MODELS:
-            actual_size = GEMINI_SIZE_MAP.get(ratio, {}).get(quality, "1024x1024")
-        elif model == "seedream-5.0-pro":
+        if model == "seedream-5.0-pro":
             actual_size = SEEDREAM_SIZE_MAP.get(ratio, "1024x1024")
         else:
             actual_size = SIZE_MAP.get(ratio, {}).get(quality, "1024x1024")
 
         fmt = self.format_combo.currentText()
         ext = fmt if fmt == "png" else "jpg"
-        response_format = self.response_format_combo.currentData() or "b64_json"
 
         params = {
             "model": model,
@@ -5664,7 +5617,6 @@ class MainWindow(QMainWindow):
             "count": count,
             "image_url": img_ref_urls if img_ref_urls else None,
             "ratio": ratio,
-            "response_format": response_format,
             "background": "transparent" if (
                 model in IMAGE_MODELS_WITH_TRANSPARENT_BACKGROUND and
                 self.background_combo.currentText() == "透明"
@@ -5672,7 +5624,7 @@ class MainWindow(QMainWindow):
         }
         summary = {
             "label": f"{model} · {count}张 · {ratio} · {quality}",
-            "meta": f"{actual_size} · {fmt} · {response_format}",
+            "meta": f"{actual_size} · {fmt}",
             "prompt": prompt,
             "count": count,
         }
@@ -5700,11 +5652,19 @@ class MainWindow(QMainWindow):
 
         count = int(self.vid_count_combo.currentText())
         size_label = self.video_size_combo.currentText()
-        size_value = VIDEO_SIZES.get(size_label, "landscape")
+        orientations = VIDEO_MODEL_ORIENTATIONS.get(model, VIDEO_SIZES)
+        size_value = orientations.get(size_label)
 
         vid_img_urls = [s["url"] for s in self._vid_img_ref_data_list if s.get("url")]
         vid_video_urls = list(self._vid_video_ref_url_list)
         vid_audio_urls = list(self._vid_audio_ref_url_list)
+        total_limit = VIDEO_MODEL_MAX_TOTAL_REFS.get(model)
+        if total_limit and len(vid_img_urls) + len(vid_video_urls) + len(vid_audio_urls) > total_limit:
+            QMessageBox.warning(self, "提示", f"{model} 的图片、视频和音频合计不能超过 {total_limit} 个")
+            return
+        if model.startswith("sd-2-") and vid_video_urls and not vid_img_urls:
+            QMessageBox.warning(self, "提示", f"{model} 使用参考视频时至少需要 1 张参考图片")
+            return
         if model == "minimax-h3" and not vid_img_urls:
             QMessageBox.warning(self, "提示", "minimax-h3 至少需要 1 张参考图片")
             return
@@ -5753,7 +5713,7 @@ class MainWindow(QMainWindow):
             "sd_ratio": sd_ratio,
             "start_image_url": start_url,
             "end_image_url": end_url,
-            "orientation_label": size_label,
+            "orientation_label": size_label or sd_ratio or "自动",
         }
         meta_parts = []
         if model.startswith("sd-2"):
@@ -5761,7 +5721,7 @@ class MainWindow(QMainWindow):
         if sd_ratio:
             meta_parts.append(sd_ratio)
         summary = {
-            "label": f"{model} · {count}个 · {size_label} · {duration}s",
+            "label": f"{model} · {count}个 · {size_label or sd_ratio or '自动'} · {duration}s",
             "meta": " · ".join(meta_parts),
             "prompt": prompt,
             "count": count,
@@ -5781,7 +5741,6 @@ class MainWindow(QMainWindow):
                 self.api_key, p["model"], p["prompt"], p["size"], p["quality"],
                 p["output_format"], p["count"], image_url=p.get("image_url"),
                 background=p.get("background"),
-                response_format=p.get("response_format", "b64_json"),
             )
         else:
             p = task.params
@@ -5797,11 +5756,17 @@ class MainWindow(QMainWindow):
         task.thread = thread
         thread.one_finished.connect(lambda idx, data, tid=tid: self.scheduler.on_task_one_finished(tid, idx, data))
         thread.error.connect(lambda idx, msg, tid=tid: self.scheduler.on_task_error(tid, idx, msg))
-        thread.progress.connect(lambda msg, tid=tid: self._on_task_progress(tid, msg))
+        thread.progress.connect(lambda msg, tid=tid: self.scheduler.task_progress_changed.emit(tid, msg))
         thread.all_done.connect(lambda tid=tid: self.scheduler.on_task_all_done(tid))
         thread.start()
 
     def _on_task_progress(self, task_id, msg):
+        task = self.scheduler.all_tasks.get(task_id)
+        if task is not None:
+            task.progress_message = msg
+            card = self._task_cards.get(task_id)
+            if card is not None:
+                card.update_state()
         if self._is_transient_status_active():
             return
         self.footer_status.setText(f"#{task_id} {msg}")
